@@ -16,7 +16,7 @@ A simple framework for building systemd daemons and background services with a F
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/daebus.git
+git clone https://github.com/twestos/daebus.git
 cd daebus
 
 # Install
@@ -26,7 +26,7 @@ cd daebus
 Or add to your project:
 
 ```bash
-pip install /path/to/daebus
+pip install daebus
 ```
 
 ## Quick Start

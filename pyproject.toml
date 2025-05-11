@@ -1,43 +1,26 @@
 [build-system]
-requires = ["setuptools>=61.0.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
 
 [project]
 name = "daebus"
-version = "1.0.0"
-description = "Daebus for interservice communication"
-readme = "README.md"
+version = "0.0.1"
 authors = [
-    {name = "Bambo Team", email = "info@bambo.dev"}
+  { name="Tom West", email="tom@bambo.co" },
 ]
-license = {text = "MIT"}
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10", 
-    "Programming Language :: Python :: 3.11"
-]
+description = "A simple way to build python services running on a raspberry pi."
+readme = "README.md"
 requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers"
+]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
 dependencies = [
     "redis>=5.0.0",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "black>=22.0.0",
-    "isort>=5.10.0"
-]
-
-[tool.setuptools]
-packages = ["daebus"]
-
-[tool.black]
-line-length = 88
-target-version = ["py39"]
-
-[tool.isort]
-profile = "black"
-line_length = 88 
+[project.urls]
+Homepage = "https://github.com/twestos/daebus"
+Issues = "https://github.com/twestos/daebus/issues"
