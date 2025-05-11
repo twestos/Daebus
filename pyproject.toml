@@ -20,7 +20,16 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 dependencies = [
     "redis>=6.0.0",
+    "apscheduler>=3.11.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.10.0",
+    "pytest-cov>=4.1.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/twestos/daebus"
 Issues = "https://github.com/twestos/daebus/issues"
