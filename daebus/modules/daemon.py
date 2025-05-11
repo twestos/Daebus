@@ -277,8 +277,18 @@ class Daebus:
             self.logger.info(
                 f"Setting up main service channel handler for {len(self.action_handlers)} actions")
 
-            # Subscribe to the main service channel
-            self.pubsub.subscribe(**{service: self._main_service_handler})
+            # Create a wrapped handler for the pubsub that properly handles context type
+            def wrapped_main_service_handler(message):
+                # Set context type to pub/sub for this thread
+                set_context_type('pubsub')
+                try:
+                    self._main_service_handler(message)
+                finally:
+                    # Always reset context type
+                    set_context_type(None)
+
+            # Subscribe to the main service channel with wrapped handler
+            self.pubsub.subscribe(**{service: wrapped_main_service_handler})
             self.logger.info(f"Subscribed to main service channel: {service}")
 
             # Start the main service handler thread
@@ -289,8 +299,17 @@ class Daebus:
         # Regular channel listeners
         channels_to_subscribe = {}
         for channel, handler in self.listen_handlers.items():
-            channels_to_subscribe[channel] = lambda message, h=handler: h(
-                json.loads(message["data"]))
+            # Create a wrapped handler that sets the context type
+            def wrapped_handler(message, h=handler):
+                # Set context type to pub/sub for this thread
+                set_context_type('pubsub')
+                try:
+                    return h(json.loads(message["data"]))
+                finally:
+                    # Always reset context type
+                    set_context_type(None)
+
+            channels_to_subscribe[channel] = wrapped_handler
             self.logger.info(f"Preparing to subscribe to channel: {channel}")
 
         # Subscribe to all explicit channels
@@ -357,19 +376,11 @@ class Daebus:
             self.request = PubSubRequest(data)
             self.response = PubSubResponse(self.redis, self.request)
 
-            # Set context type to pub/sub for this thread
-            set_context_type('pubsub')
-
             self.logger.debug(f"Routing action '{action}' with data: {data}")
             handler()
 
-            # Reset context type
-            set_context_type(None)
-
         except Exception as e:
             self.logger.error(f"Error in main service handler: {e}")
-            # Reset context type in case of error
-            set_context_type(None)
 
     def _pubsub_listener(self, pubsub_instance=None):
         """Listen for messages on the subscribed channels"""

@@ -1,7 +1,10 @@
 import threading
 from typing import Any, Optional, Dict, List, Callable, Union, TypeVar, Type, cast
 
-# thread‑local storage for current daemon
+# Global daemon instance
+_global_daemon = None
+
+# Thread‑local storage for context type only
 _context = threading.local()
 
 T = TypeVar('T')  # Generic type for return values
@@ -9,33 +12,33 @@ T = TypeVar('T')  # Generic type for return values
 
 def set_daemon(daemon: Any) -> None:
     """
-    Set the current daemon instance in thread-local storage.
+    Set the daemon instance globally.
 
     Args:
         daemon: The Daebus daemon instance
     """
-    _context.daemon = daemon
+    global _global_daemon
+    _global_daemon = daemon
 
 
 def get_daemon() -> Any:
     """
-    Get the current daemon instance from thread-local storage.
+    Get the daemon instance from the global variable.
 
     Returns:
-        The current Daebus daemon instance
+        The Daebus daemon instance
 
     Raises:
         RuntimeError: If no daemon has been set
     """
-    try:
-        return _context.daemon
-    except AttributeError:
+    if _global_daemon is None:
         raise RuntimeError("Daebus not initialized; call app.run() first")
+    return _global_daemon
 
 
 def set_context_type(context_type: Optional[str]) -> None:
     """
-    Set the current context type (http or pubsub).
+    Set the current context type (http or pubsub) in thread-local storage.
 
     Args:
         context_type: Either 'http', 'pubsub', or None
@@ -48,7 +51,7 @@ def set_context_type(context_type: Optional[str]) -> None:
 
 def get_context_type() -> Optional[str]:
     """
-    Get the current context type (http or pubsub).
+    Get the current context type (http or pubsub) from thread-local storage.
 
     Returns:
         str: The context type ('http', 'pubsub') or None if not set

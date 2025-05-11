@@ -26,13 +26,19 @@ def test_daemon_context():
 
 def test_get_daemon_not_set():
     """Test getting daemon when not set"""
-    # Clear thread local storage
-    if hasattr(context._context, 'daemon'):
-        delattr(context._context, 'daemon')
+    # Store the current global daemon
+    original_daemon = context._global_daemon
     
-    # Trying to get daemon should raise RuntimeError
-    with pytest.raises(RuntimeError, match="Daebus not initialized"):
-        get_daemon()
+    # Set the global daemon to None
+    context._global_daemon = None
+    
+    try:
+        # Trying to get daemon should raise RuntimeError
+        with pytest.raises(RuntimeError, match="Daebus not initialized"):
+            get_daemon()
+    finally:
+        # Restore the original daemon to not affect other tests
+        context._global_daemon = original_daemon
 
 
 def test_context_type():

@@ -1,0 +1,15 @@
+[Unit]
+Description=System Server Service
+After=network.target redis.service
+Requires=redis.service
+
+[Service]
+ExecStart=/home/pi/software/run.sh
+WorkingDirectory=/home/pi/software/daemons/system-server
+Restart=always
+TimeoutStartSec=60
+Type=notify
+NotifyAccess=all
+
+[Install]
+WantedBy=multi-user.target 
