@@ -8,7 +8,7 @@ version = "0.0.12"
 authors = [
   { name="Tom West", email="tom@bambo.co" },
 ]
-description = "A simple way to build python services running on a raspberry pi."
+description = "A lightweight framework for building Python background services with a Flask-like API, enabling seamless inter-service communication via Redis pub/sub."
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
