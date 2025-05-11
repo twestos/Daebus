@@ -27,12 +27,12 @@ jobs:
         id: check_version
         run: |
           # Get current version
-          CURRENT_VERSION=$(grep -m 1 "version" setup.py | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          CURRENT_VERSION=$(grep -m 1 "version = " pyproject.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           echo "Current version: $CURRENT_VERSION"
           
           # Check if version changed in this commit
           git fetch origin main
-          PREV_VERSION=$(git show origin/main:setup.py | grep -m 1 "version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          PREV_VERSION=$(git show origin/main:pyproject.toml | grep -m 1 "version = " | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           echo "Previous version: $PREV_VERSION"
           
           if [ "$CURRENT_VERSION" != "$PREV_VERSION" ]; then
