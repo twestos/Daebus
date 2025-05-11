@@ -9,6 +9,10 @@ on:
     paths:
       - 'pyproject.toml'
       - 'daebus/__init__.py'
+  workflow_run:
+    workflows: ["Bump Version"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: write
@@ -17,11 +21,16 @@ permissions:
 jobs:
   check_version_bump:
     runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, 'Bump version')
+    if: >
+      (github.event_name == 'push' && contains(github.event.head_commit.message, 'Bump version')) || 
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     outputs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # If triggered by workflow_run, make sure to get the right commit
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       - name: Extract version
         id: get_version
         run: |
