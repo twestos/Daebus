@@ -4,11 +4,6 @@
 name: Upload Python Package
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'pyproject.toml'
-      - 'daebus/__init__.py'
   workflow_run:
     workflows: ["Bump Version"]
     types: [completed]
@@ -21,9 +16,7 @@ permissions:
 jobs:
   check_version_bump:
     runs-on: ubuntu-latest
-    if: >
-      (github.event_name == 'push' && contains(github.event.head_commit.message, 'Bump version')) || 
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    if: github.event.workflow_run.conclusion == 'success'
     outputs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
