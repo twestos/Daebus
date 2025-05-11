@@ -1,4 +1,4 @@
-__version__ = "0.0.14"
+__version__ = "0.0.15"
 
 from .modules.daemon import Daebus
 from .modules.context import request, response, broadcast, cache, logger
