@@ -10,8 +10,9 @@ class Broadcast:
     This class provides a convenient way to broadcast messages to any Redis pub/sub channel.
     """
 
-    def __init__(self, redis_client=None):
-        self._redis = redis_client or redis_client
+    def __init__(self, custom_redis_client=None):
+        # Use the provided client or fall back to the global redis_client
+        self._redis = custom_redis_client if custom_redis_client is not None else redis_client
         if self._redis is None:
             raise RuntimeError("Redis client not available")
 

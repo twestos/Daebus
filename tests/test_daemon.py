@@ -74,8 +74,8 @@ def test_on_start_registration(daebus_app):
     assert daebus_app._on_start_handlers[0] is handle_on_start
 
 
-# Skip this test for now as it requires complex mocking of the redis_client module
-@pytest.mark.skip(reason="Requires complex mocking of redis_client module")
+# Skip this test for now as it requires complex mocking of redis_client module
+@pytest.mark.skip(reason="Requires complex mocking of multiple components including Redis, threading, and scheduling")
 def test_run_initialization():
     """Test that run method initializes components correctly"""
     pass 
