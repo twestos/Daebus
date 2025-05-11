@@ -460,7 +460,7 @@ def risky_operation():
 
 ## Background
 
-Daebus was born from the need to manage multiple systemd services on a Raspberry Pi kiosk device. The project required several background daemons that could:
+Daebus was born from the need to manage multiple systemd services on Raspberry Pi kiosks. The project required several background daemons that could:
 
 1. Communicate with each other efficiently
 2. Expose HTTP endpoints for frontend applications running in Chromium
