@@ -468,6 +468,117 @@ follow these guidelines:
 3. **Initialization**: Use `direct_logger` before calling `app.run()`.
 4. **On Start Handlers**: For consistency, use `direct_logger` in `on_start` handlers.
 
+## Concurrent Message Processing
+
+Daebus 0.0.16+ includes built-in concurrent message processing to handle multiple incoming messages simultaneously:
+
+- Messages are processed in a thread pool (default: 10 worker threads)
+- Each message gets its own dedicated thread-local context
+- Multiple services can communicate with the same service without blocking each other
+- Long-running message handlers won't block other messages from being processed
+
+You can adjust the thread pool size when initializing Daebus:
+
+```python
+app = Daebus(__name__, max_workers=20)  # Use 20 worker threads instead of the default 10
+```
+
+This ensures that your service can handle multiple concurrent requests efficiently, especially in environments where multiple services might be sending messages at the same time.
+
+### Thread Safety Implementation
+
+Daebus achieves thread safety through several mechanisms:
+
+1. **Thread-Local Storage**: 
+   - Each message handler thread gets its own isolated thread-local `request` and `response` objects
+   - Thread-local storage prevents data leakage between concurrent operations
+   - The framework automatically manages the thread-local context lifecycle
+
+2. **Proxy Pattern**:
+   - The `request` and `response` global objects are actually proxies
+   - These proxies automatically detect which thread is executing and retrieve the correct thread-local objects
+   - This approach maintains backward compatibility while enabling concurrency
+
+3. **Thread Pool Management**:
+   - A configurable `ThreadPoolExecutor` manages concurrent message processing
+   - The pool size can be tuned based on system resources and workload characteristics
+   - Protection against thread pool exhaustion with retry mechanisms and exponential backoff
+
+4. **Resource Cleanup**:
+   - Thread-local storage is properly cleaned up after each message is processed
+   - This prevents memory leaks and ensures resources are released
+
+### Performance Considerations
+
+Based on stress testing, the concurrent processing architecture can handle:
+
+- Thousands of messages per second on modest hardware
+- Burst patterns of traffic without message loss
+- Long-running handlers without blocking other messages
+
+For optimal performance:
+
+- **Thread Pool Size**: For most applications, 10-20 workers is sufficient. CPU-bound workloads may benefit from fewer workers (matching CPU core count), while I/O-bound workloads may benefit from more workers.
+- **Message Processing**: Keep message handlers efficient. While concurrency allows long-running handlers, it's still best practice to keep processing time minimal.
+- **Redis Connection**: Ensure your Redis instance can handle the concurrent connections and throughput.
+
+### Error Handling in Concurrent Context
+
+When a handler encounters an exception:
+
+- The error is contained within that specific thread
+- Other message processing continues unaffected
+- The framework logs the error and properly cleans up thread-local resources
+- For background tasks, always use `direct_logger` instead of the proxy `logger`
+
+```python
+from daebus import Daebus, direct_logger
+
+app = Daebus(__name__, max_workers=20)
+
+@app.thread("long_running")
+def background_processor(running):
+    while running():
+        try:
+            # Process something
+            pass
+        except Exception as e:
+            # Always use direct_logger for thread-safe logging
+            direct_logger.error(f"Error in background processor: {e}")
+```
+
+### Advanced: Thread-Safe Shared State
+
+If your service needs to share state between message handlers:
+
+1. Use thread-safe data structures from `queue` or `collections.concurrent`
+2. Protect shared resources with locks from the `threading` module
+3. Consider using atomic operations where possible
+
+Example:
+
+```python
+import threading
+from daebus import Daebus, request, response
+
+app = Daebus(__name__)
+
+# Thread-safe counter using a lock
+request_counter = 0
+counter_lock = threading.Lock()
+
+@app.action("increment")
+def increment_counter():
+    global request_counter
+    
+    # Use a lock to safely update shared state
+    with counter_lock:
+        request_counter += 1
+        current_count = request_counter
+    
+    return response.success({"count": current_count})
+```
+
 ## License
 
 MIT
