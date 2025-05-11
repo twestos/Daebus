@@ -19,8 +19,9 @@ classifiers = [
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 dependencies = [
-    "redis>=5.0.0",
+    "redis>=6.0.0",
 ]
 [project.urls]
 Homepage = "https://github.com/twestos/daebus"
 Issues = "https://github.com/twestos/daebus/issues"
+
