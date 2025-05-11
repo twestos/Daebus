@@ -19,6 +19,7 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success'
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      tag_exists: ${{ steps.check_tag.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,6 +36,10 @@ jobs:
           echo "Files changed:"
           git show --name-status HEAD
       
+      - name: Fetch all tags
+        run: |
+          git fetch --tags -f
+      
       - name: Extract version
         id: get_version
         run: |
@@ -43,14 +48,51 @@ jobs:
           cat pyproject.toml | grep -A 2 "version ="
           
           # Get version directly from file
-          VERSION=$(grep -m 1 "version = " pyproject.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          FILE_VERSION=$(grep -m 1 "version = " pyproject.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           
-          # Double check from git tags
+          # Get latest tag version
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "Latest git tag: $LATEST_TAG"
+          TAG_VERSION=${LATEST_TAG#v}
           
-          echo "Extracted version from pyproject.toml: $VERSION"
+          echo "Version in pyproject.toml: $FILE_VERSION"
+          echo "Latest git tag: $LATEST_TAG ($TAG_VERSION)"
+          
+          # Use the more recent version (comparing tags with file)
+          if [[ "$TAG_VERSION" > "$FILE_VERSION" ]]; then
+            echo "Tag version is more recent, using $TAG_VERSION"
+            VERSION=$TAG_VERSION
+          else
+            echo "File version is more recent or equal, using $FILE_VERSION"
+            VERSION=$FILE_VERSION
+          fi
+          
+          echo "Using version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag v$VERSION does not exist yet"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Check if release exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          RELEASE_EXISTS=$(gh release view "v$VERSION" --json id 2>/dev/null || echo "")
+          if [ -n "$RELEASE_EXISTS" ]; then
+            echo "Release for v$VERSION already exists"
+          else
+            echo "Release for v$VERSION does not exist yet"
+          fi
 
   deploy:
     needs: check_version_bump
