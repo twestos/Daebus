@@ -512,7 +512,7 @@ class Daebus:
                 # Submit the task to the thread pool
                 return self.thread_pool.submit(func, *args)
                 
-            except concurrent.futures.thread.BrokenThreadPool:
+            except concurrent.futures.BrokenExecutor:
                 # Thread pool is broken, create a new one
                 self.logger.warning("Thread pool is broken, creating a new one")
                 self.thread_pool.shutdown(wait=False)
