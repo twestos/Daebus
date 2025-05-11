@@ -25,9 +25,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "pytest-mock>=3.10.0",
-    "pytest-cov>=4.1.0",
+    "pytest>=8.3.5",
+    "pytest-mock>=3.14.0",
+    "pytest-cov>=6.1.1",
+    "bump2version>=1.0.1",
+    "codecov>=2.1.13",
+    "flake8>=7.2.0",
 ]
 
 [project.urls]
