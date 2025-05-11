@@ -1,6 +1,18 @@
 # Daebus
 
-A simple framework for building systemd daemons and background services with a Flask-like interface, designed for inter-service communication in Linux environments.
+A simple framework for building systemd daemons and background services with a Flask-like interface, designed for inter-service communication in Linux environments. Daebus makes it easy to build, connect, and manage services for embedded devices like Raspberry Pi kiosks.
+
+## Overview
+
+Daebus was created to solve the challenge of managing multiple systemd services on Linux devices such as Raspberry Pi kiosks. It provides a Flask-inspired API that makes it simple to:
+
+- Create systemd daemons that communicate with each other
+- Expose HTTP endpoints for frontend applications (e.g., kiosk browsers)
+- Enable quick bootstrapping of new services with minimal boilerplate
+
+Services communicate via Redis pub/sub channels, providing a lightweight and reliable messaging system ideal for local service orchestration.
+
+> **Note**: Daebus requires a Redis instance running on the system.
 
 ## Features
 
@@ -13,18 +25,6 @@ A simple framework for building systemd daemons and background services with a F
 - **Specialized APIs**: Distinct and purpose-built APIs for HTTP and pub/sub contexts
 
 ## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/twestos/daebus.git
-cd daebus
-
-# Install
-./install.sh
-```
-
-Or add to your project:
-
 ```bash
 pip install daebus
 ```
@@ -460,7 +460,15 @@ def risky_operation():
 
 ## Background
 
-Daebus was created for the Bambo project to enable microservice-like architecture within Linux environments, addressing limitations of Unix sockets for inter-service communication. The Redis pub/sub mechanism provides a lightweight, channel-based approach that is ideal for targeted service communications.
+Daebus was born from the need to manage multiple systemd services on a Raspberry Pi kiosk device. The project required several background daemons that could:
+
+1. Communicate with each other efficiently
+2. Expose HTTP endpoints for frontend applications running in Chromium
+3. Be easily bootstrapped with minimal boilerplate
+
+Traditional approaches like Unix sockets proved limiting, so Redis pub/sub was chosen as the communication backbone due to its reliability and simplicity. The Flask-like interface was inspired by the ease of setting up web services with Flask, bringing that same developer experience to systemd daemon development.
+
+For proper operation, Daebus requires a Redis instance running on the system to handle the pub/sub messaging between services.
 
 # Version Management
 
