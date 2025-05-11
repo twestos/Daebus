@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # Required for PyPI trusted publishing
 
 jobs:
   check_version_bump:
