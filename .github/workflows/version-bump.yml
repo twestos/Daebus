@@ -1,0 +1,49 @@
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      part:
+        description: 'Part of version to bump (major, minor, patch)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  bump_version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install bump2version
+      
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+      
+      - name: Bump version
+        run: |
+          bump2version ${{ github.event.inputs.part }}
+          
+      - name: Push changes and tags
+        run: |
+          git push
+          git push --tags 

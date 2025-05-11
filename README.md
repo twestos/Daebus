@@ -461,3 +461,23 @@ def risky_operation():
 ## Background
 
 Daebus was created for the Bambo project to enable microservice-like architecture within Linux environments, addressing limitations of Unix sockets for inter-service communication. The Redis pub/sub mechanism provides a lightweight, channel-based approach that is ideal for targeted service communications.
+
+# Version Management
+
+To increment the version number, use bump2version:
+
+```bash
+# For patch version (0.0.1 -> 0.0.2)
+bump2version patch
+
+# For minor version (0.1.0 -> 0.2.0)
+bump2version minor
+
+# For major version (1.0.0 -> 2.0.0)
+bump2version major
+
+# Don't forget to push both the commit and the tags
+git push && git push --tags
+```
+
+You can also use the GitHub Actions workflow "Bump Version" to automatically bump versions and push tags.
