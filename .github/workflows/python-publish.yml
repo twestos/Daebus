@@ -22,9 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # If triggered by workflow_run, make sure to get the right commit
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Make sure to get the right commit from the Bump Version workflow
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          # Use the same authentication method as the version-bump workflow
+          ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
       
       - name: Debug git info
         run: |
@@ -55,16 +57,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Make sure to get the right commit from the Bump Version workflow
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          # Use the same authentication method
+          ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install build twine
+      
       - name: Build package
         run: python -m build
+      
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
