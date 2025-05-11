@@ -358,3 +358,116 @@ Daebus provides specialized classes for each protocol:
 
     - `PubSubRequest`: Handles pub/sub message payloads, reply channels, and request IDs
     - `PubSubResponse`: Handles pub/sub responses and error handling
+
+## Usage
+
+### Basic Usage
+
+```python
+from daebus import Daebus, response, request, logger
+
+app = Daebus(__name__)
+
+@app.action("hello_world")
+def hello_world():
+    name = request.payload.get("name", "World")
+    logger.info(f"Received request from {name}")
+    return response.success({"message": f"Hello, {name}!"})
+
+if __name__ == "__main__":
+    app.run(service='hello-service')
+```
+
+### Logging
+
+Daebus provides two logger options:
+- `logger`: A proxy that references the service's logger. This works within main handlers.
+- `direct_logger`: A direct reference to the base logger. This works in all contexts.
+
+For background tasks, scheduled jobs, and other situations where the thread context might differ, use `direct_logger`:
+
+```python
+from daebus import Daebus, direct_logger
+
+app = Daebus(__name__)
+
+@app.background("periodic_task", interval=60)
+def run_periodic_task():
+    try:
+        # Do some work
+        direct_logger.info("Periodic task completed")
+    except Exception as e:
+        # Always use direct_logger in background tasks
+        direct_logger.error(f"Error in periodic task: {e}")
+
+if __name__ == "__main__":
+    app.run(service='background-service')
+```
+
+### HTTP Endpoints
+
+```python
+from daebus import Daebus, DaebusHttp, response, logger
+
+app = Daebus(__name__)
+http = DaebusHttp(port=8080)
+
+app.attach(http)
+
+@app.route("/hello")
+def hello(request):
+    name = request.params.get("name", "World")
+    logger.info(f"HTTP request from {name}")
+    return response.send({"message": f"Hello, {name}!"}, 200)
+
+if __name__ == "__main__":
+    app.run(service='web-service')
+```
+
+### Cross-Service Communication
+
+```python
+from daebus import Daebus, DaebusCaller, direct_logger
+
+app = Daebus(__name__)
+
+# Create a caller for another service
+other_service = DaebusCaller("other-service")
+
+@app.on_start()
+def initialize():
+    direct_logger.info("Notifying other services that we've started")
+    try:
+        # Send a message to another service
+        result = other_service.send_message("service_started", {
+            "service_name": "my-service",
+            "timestamp": time.time()
+        })
+        direct_logger.info(f"Notification sent, response: {result}")
+    except Exception as e:
+        direct_logger.error(f"Failed to send notification: {e}")
+
+if __name__ == "__main__":
+    app.run(service='my-service')
+```
+
+## Advanced Features
+
+- **Background Tasks**: Run tasks periodically with `@app.background(name, interval)`
+- **Threads**: Run long-running tasks in dedicated threads with `@app.thread(name)`
+- **Lifecycle Hooks**: Register functions to run at service startup with `@app.on_start()`
+- **HTTP**: Add HTTP endpoints with `@app.route(path, methods)`
+
+## Thread Safety and Contexts
+
+When working with Daebus in different contexts (HTTP handlers, background tasks, service initialization), 
+follow these guidelines:
+
+1. **Main Handlers**: In action handlers and HTTP route handlers, you can use `logger`, `request`, and `response`.
+2. **Background Tasks**: Always use `direct_logger` for logging in background tasks and scheduled jobs.
+3. **Initialization**: Use `direct_logger` before calling `app.run()`.
+4. **On Start Handlers**: For consistency, use `direct_logger` in `on_start` handlers.
+
+## License
+
+MIT

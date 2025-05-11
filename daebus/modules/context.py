@@ -1,5 +1,9 @@
 import threading
 from typing import Any, Optional, Dict, List, Callable, Union, TypeVar, Type, cast
+import logging
+
+# Import the base logger
+from .logger import logger as base_logger
 
 # Global daemon instance
 _global_daemon = None
@@ -71,6 +75,26 @@ class _Proxy:
                 f"'{self.__class__.__name__}' object has no attribute '{name}'") from None
 
 
+class LoggerProxy:
+    """
+    Special proxy for the logger that works in any context.
+    Falls back to the base logger if daemon is not available.
+    """
+    
+    def __getattr__(self, name: str) -> Any:
+        # Try to get logger from daemon first
+        try:
+            daemon = get_daemon()
+            if hasattr(daemon, 'logger'):
+                return getattr(daemon.logger, name)
+        except Exception:
+            # If daemon is not available or has no logger, fall back to base logger
+            pass
+            
+        # Fall back to base logger
+        return getattr(base_logger, name)
+
+
 class _ContextObjectProxy:
     """
     A base class for proxies that need to switch between HTTP and pub/sub implementations.
@@ -133,12 +157,12 @@ class RequestProxy(_ContextObjectProxy):
                 # These are allowed but will return None in HTTP context
                 pass
             else:
-                self.logger.warning(
+                logger.warning(
                     f"Accessing pub/sub-specific attribute '{name}' in HTTP context. "
                     f"This may not work as expected."
                 )
         elif context_type == 'pubsub' and name in self.HTTP_ATTRS:
-            self.logger.warning(
+            logger.warning(
                 f"Accessing HTTP-specific attribute '{name}' in pub/sub context. "
                 f"This may not work as expected."
             )
@@ -159,12 +183,6 @@ class RequestProxy(_ContextObjectProxy):
 
             raise AttributeError(
                 f"'{self.__class__.__name__}' object has no attribute '{name}'. {hint}")
-
-    @property
-    def logger(self) -> Any:
-        """Get the logger from the daemon"""
-        daemon = get_daemon()
-        return daemon.logger
 
 
 class ResponseProxy(_ContextObjectProxy):
@@ -224,4 +242,4 @@ request = RequestProxy()
 response = ResponseProxy()
 broadcast = _Proxy()
 cache = _Proxy()  # raw redis client
-logger = _Proxy()
+logger = LoggerProxy()
