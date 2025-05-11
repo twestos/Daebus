@@ -13,6 +13,17 @@ permissions:
   contents: read
 
 jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug workflow trigger
+        run: |
+          echo "Workflow run triggered by: ${{ github.event.workflow_run.workflow_id }}"
+          echo "Workflow conclusion: ${{ github.event.workflow_run.conclusion }}"
+          echo "Workflow head branch: ${{ github.event.workflow_run.head_branch }}"
+          echo "Workflow head SHA: ${{ github.event.workflow_run.head_sha }}"
+          echo "Event that triggered workflow: ${{ github.event.workflow_run.event }}"
+
   check_version:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
@@ -22,6 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
       - name: Check if version changed
         id: check_version
@@ -32,7 +44,7 @@ jobs:
           
           # Check if version changed in this commit
           git fetch origin main
-          PREV_VERSION=$(git show origin/main:pyproject.toml | grep -m 1 "version = " | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          PREV_VERSION=$(git show HEAD~1:pyproject.toml | grep -m 1 "version = " | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           echo "Previous version: $PREV_VERSION"
           
           if [ "$CURRENT_VERSION" != "$PREV_VERSION" ]; then
@@ -45,12 +57,16 @@ jobs:
           fi
 
   deploy:
-    needs: check_version
-    if: ${{ needs.check_version.outputs.version_changed == 'true' }}
+    needs: [debug, check_version]
+    if: ${{ always() && needs.check_version.outputs.version_changed == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for creating releases
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -64,4 +80,14 @@ jobs:
     - name: Publish package
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
-        password: ${{ secrets.PYPI_API_TOKEN }} 
+        password: ${{ secrets.PYPI_API_TOKEN }}
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ needs.check_version.outputs.version }}
+        name: Release v${{ needs.check_version.outputs.version }}
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        token: ${{ secrets.GITHUB_TOKEN }} 
