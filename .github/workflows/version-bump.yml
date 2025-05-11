@@ -43,6 +43,13 @@ jobs:
         run: |
           bump2version ${{ github.event.inputs.part }}
           
+      - name: Debug version info
+        run: |
+          echo "Updated version in files:"
+          grep -m 1 "version = " pyproject.toml
+          echo "Latest commit:"
+          git log -1 --pretty=format:"%h %s"
+          
       - name: Push changes and tags
         run: |
           git push

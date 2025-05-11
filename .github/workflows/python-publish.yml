@@ -31,11 +31,30 @@ jobs:
         with:
           # If triggered by workflow_run, make sure to get the right commit
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      
+      - name: Debug git info
+        run: |
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "Commit message: $(git log -1 --pretty=%B)"
+          echo "Files changed:"
+          git show --name-status HEAD
+      
       - name: Extract version
         id: get_version
         run: |
+          # First check pyproject.toml content to ensure we're seeing the most recent version
+          echo "pyproject.toml content:"
+          cat pyproject.toml | grep -A 2 "version ="
+          
+          # Get version directly from file
           VERSION=$(grep -m 1 "version = " pyproject.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-          echo "Version: $VERSION"
+          
+          # Double check from git tags
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest git tag: $LATEST_TAG"
+          
+          echo "Extracted version from pyproject.toml: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   deploy:
