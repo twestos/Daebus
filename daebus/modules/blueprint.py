@@ -75,11 +75,70 @@ class Blueprint:
         return decorator
     
     def socket(self, message_type: str):
-        """Register a WebSocket message handler within this blueprint"""
+        """
+        Register a WebSocket message handler within this blueprint.
+        
+        Args:
+            message_type: The type of message to handle
+            
+        Example:
+            @blueprint.socket("chat_message")
+            def handle_chat_message(req, sid):
+                # req is the raw message data
+                # sid is the client ID (session ID)
+                
+                message = req.get('message', '')
+                print(f"Got message from {sid}: {message}")
+                
+                # Return a response (will be sent automatically)
+                return {"status": "received"}
+        """
         def decorator(func):
             self.socket_handlers[message_type] = func
             return func
         return decorator
+    
+    def socket_connect(self):
+        """
+        Register a handler for WebSocket connect events.
+        
+        This is a shorthand for @blueprint.socket('connect')
+        
+        Example:
+            @blueprint.socket_connect()
+            def on_connect(req, sid):
+                print(f"Client {sid} connected")
+                return {"status": "connected"}
+        """
+        return self.socket('connect')
+    
+    def socket_disconnect(self):
+        """
+        Register a handler for WebSocket disconnect events.
+        
+        This is a shorthand for @blueprint.socket('disconnect')
+        
+        Example:
+            @blueprint.socket_disconnect()
+            def on_disconnect(req, sid):
+                print(f"Client {sid} disconnected")
+        """
+        return self.socket('disconnect')
+    
+    def socket_register(self):
+        """
+        Register a handler for WebSocket client registration events.
+        
+        This is a shorthand for @blueprint.socket('register')
+        
+        Example:
+            @blueprint.socket_register()
+            def on_register(req, sid):
+                user_data = req.get('user_data', {})
+                print(f"Client {sid} registered with data: {user_data}")
+                return {"status": "registered", "client_id": sid}
+        """
+        return self.socket('register')
     
     def background(self, name: str, interval: int):
         """Register a background task within this blueprint"""

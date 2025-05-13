@@ -2,6 +2,7 @@ import json
 import threading
 import traceback
 import asyncio
+import uuid
 from typing import Dict, Any, Callable, List, Set, Optional, Union
 
 import websockets
@@ -61,6 +62,7 @@ class DaebusWebSocket:
         self.clients: Dict[str, WebSocketServerProtocol] = {}
         self.client_counter = 0
         self.logger = _default_logger.getChild('websocket')
+        self.client_id_generator = None  # Custom client ID generator function
 
     def attach(self, daemon: Any) -> None:
         """
@@ -129,15 +131,62 @@ class DaebusWebSocket:
 
         Example:
             @app.socket("chat_message")
-            def handle_chat_message(req):
-                # Access message data with req.data
-                # Send a response using websocket.send({"status": "received"})
+            def handle_chat_message(req, sid):
+                # req is the raw message data
+                # sid is the client ID (session ID)
+                
+                message = req.get('message', '')
+                print(f"Got message from {sid}: {message}")
+                
+                # Return a response (will be sent automatically)
                 return {"status": "received"}
         """
         def decorator(func):
             self.message_handlers[message_type] = func
             return func
         return decorator
+    
+    def socket_connect(self):
+        """
+        Register a handler for WebSocket connect events.
+        
+        This is a shorthand for @app.socket('connect')
+        
+        Example:
+            @app.socket_connect()
+            def on_connect(req, sid):
+                print(f"Client {sid} connected")
+                return {"status": "connected"}
+        """
+        return self.socket('connect')
+    
+    def socket_disconnect(self):
+        """
+        Register a handler for WebSocket disconnect events.
+        
+        This is a shorthand for @app.socket('disconnect')
+        
+        Example:
+            @app.socket_disconnect()
+            def on_disconnect(req, sid):
+                print(f"Client {sid} disconnected")
+        """
+        return self.socket('disconnect')
+    
+    def socket_register(self):
+        """
+        Register a handler for WebSocket client registration events.
+        
+        This is a shorthand for @app.socket('register')
+        
+        Example:
+            @app.socket_register()
+            def on_register(req, sid):
+                user_data = req.get('user_data', {})
+                print(f"Client {sid} registered with data: {user_data}")
+                return {"status": "registered", "client_id": sid}
+        """
+        return self.socket('register')
 
     def on_connect(self, func):
         """Register a handler for new WebSocket connections."""
@@ -148,6 +197,55 @@ class DaebusWebSocket:
         """Register a handler for WebSocket disconnections."""
         self.disconnection_handlers.append(func)
         return func
+
+    def set_client_id_generator(self, generator_func: Callable[[WebSocketServerProtocol, str], str]) -> None:
+        """
+        Set a custom function to generate client IDs when clients connect.
+        
+        The generator function should accept the WebSocket connection and path,
+        and return a string ID for the client.
+        
+        Args:
+            generator_func: Function that takes (websocket, path) and returns a client ID string
+            
+        Example:
+            def custom_id_generator(websocket, path):
+                # Generate an ID based on remote address and a timestamp
+                addr = websocket.remote_address[0]
+                timestamp = int(time.time())
+                return f"client_{addr}_{timestamp}"
+                
+            websocket.set_client_id_generator(custom_id_generator)
+        """
+        self.client_id_generator = generator_func
+        
+    def generate_client_id(self, websocket: WebSocketServerProtocol, path: str) -> str:
+        """
+        Generate a client ID for a new connection.
+        
+        If a custom generator is set, it will be used. Otherwise, a UUID
+        will be generated.
+        
+        Args:
+            websocket: The WebSocket connection
+            path: The connection path
+            
+        Returns:
+            str: The generated client ID
+        """
+        # Use custom generator if set
+        if self.client_id_generator:
+            try:
+                client_id = self.client_id_generator(websocket, path)
+                if client_id and isinstance(client_id, str):
+                    return client_id
+                self.logger.warning("Custom client ID generator returned invalid ID, using default")
+            except Exception as e:
+                self.logger.error(f"Error in custom client ID generator: {e}")
+                self.logger.warning("Using default client ID generator")
+        
+        # Default UUID generator
+        return f"user_{str(uuid.uuid4())}"
 
     # Core methods for sending messages
 
@@ -253,6 +351,152 @@ class DaebusWebSocket:
         finally:
             loop.close()
         
+    async def send_to_client_async(self, client_id: str, data: Any, message_type: str = "message") -> bool:
+        """
+        Send a message to a specific client asynchronously.
+        
+        Args:
+            client_id: The ID of the client to send to
+            data: The data to send
+            message_type: The type of message (default: "message")
+            
+        Returns:
+            bool: True if the message was sent, False if the client is not connected
+        """
+        if client_id not in self.clients:
+            self.logger.warning(f"Cannot send to client {client_id}: Client not connected")
+            return False
+            
+        message = {
+            "type": message_type,
+            "data": data
+        }
+        message_json = json.dumps(message)
+        
+        try:
+            await self.clients[client_id].send(message_json)
+            return True
+        except Exception as e:
+            self.logger.warning(f"Failed to send to client {client_id}: {e}")
+            return False
+    
+    def send_to_client(self, client_id: str, data: Any, message_type: str = "message") -> bool:
+        """
+        Send a message to a specific client.
+        
+        Args:
+            client_id: The ID of the client to send to
+            data: The data to send
+            message_type: The type of message (default: "message")
+            
+        Returns:
+            bool: True if the message was sent, False if the client is not connected
+        """
+        # Check if the client is connected
+        if client_id not in self.clients:
+            self.logger.warning(f"Cannot send to client {client_id}: Client not connected")
+            return False
+            
+        # Check if we're already in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                # We're in an event loop, create a task
+                task = loop.create_task(self.send_to_client_async(client_id, data, message_type))
+                # We can't directly return the result of the task since it's async
+                # Instead, we'll just return True to indicate the message was queued
+                return True
+        except RuntimeError:
+            # No running event loop, use a new one
+            pass
+            
+        # No event loop running, create one
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(self.send_to_client_async(client_id, data, message_type))
+        finally:
+            loop.close()
+    
+    async def broadcast_to_clients_async(self, client_ids: List[str], data: Any, message_type: str = "message") -> Dict[str, bool]:
+        """
+        Broadcast a message to a specific set of clients asynchronously.
+        
+        Args:
+            client_ids: List of client IDs to send to
+            data: The data to send
+            message_type: The type of message (default: "message")
+            
+        Returns:
+            Dict[str, bool]: Map of client_id to success/failure status
+        """
+        results = {}
+        message = {
+            "type": message_type,
+            "data": data
+        }
+        message_json = json.dumps(message)
+        
+        for client_id in client_ids:
+            if client_id not in self.clients:
+                self.logger.warning(f"Cannot send to client {client_id}: Client not connected")
+                results[client_id] = False
+                continue
+                
+            try:
+                await self.clients[client_id].send(message_json)
+                results[client_id] = True
+            except Exception as e:
+                self.logger.warning(f"Failed to send to client {client_id}: {e}")
+                results[client_id] = False
+                
+        return results
+    
+    def broadcast_to_clients(self, client_ids: List[str], data: Any, message_type: str = "message") -> Dict[str, bool]:
+        """
+        Broadcast a message to a specific set of clients.
+        
+        Args:
+            client_ids: List of client IDs to send to
+            data: The data to send
+            message_type: The type of message (default: "message")
+            
+        Returns:
+            Dict[str, bool]: Map of client_id to success/failure status
+        """
+        # Filter out invalid client IDs
+        valid_client_ids = [cid for cid in client_ids if cid in self.clients]
+        
+        if not valid_client_ids:
+            self.logger.warning(f"No valid clients in {client_ids}")
+            return {cid: False for cid in client_ids}
+            
+        # Check if we're already in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                # We're in an event loop, create a task
+                task = loop.create_task(self.broadcast_to_clients_async(valid_client_ids, data, message_type))
+                # We can't directly return the result of the task since it's async
+                # Instead, we'll just return a placeholder result
+                return {cid: True for cid in valid_client_ids}
+        except RuntimeError:
+            # No running event loop, use a new one
+            pass
+            
+        # No event loop running, create one
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(self.broadcast_to_clients_async(valid_client_ids, data, message_type))
+            
+            # Combine the results with the invalid clients
+            for cid in client_ids:
+                if cid not in result:
+                    result[cid] = False
+                    
+            return result
+        finally:
+            loop.close()
+        
     # Client management methods
         
     def get_clients(self) -> List[str]:
@@ -296,8 +540,7 @@ class DaebusWebSocket:
             path: The connection path
         """
         # Generate a unique client ID
-        self.client_counter += 1
-        client_id = f"client_{self.client_counter}"
+        client_id = self.generate_client_id(websocket, path)
         
         # Store the client
         self.clients[client_id] = websocket
@@ -309,6 +552,25 @@ class DaebusWebSocket:
                     handler(client_id)
                 except Exception as e:
                     self.logger.error(f"Error in connection handler: {e}")
+            
+            # Handle 'connect' event if there's a handler
+            connect_handler = self.message_handlers.get('connect')
+            if connect_handler:
+                try:
+                    # Empty data for connect event
+                    connect_data = {}
+                    
+                    # Call the handler with (data, client_id)
+                    result = connect_handler(connect_data, client_id)
+                    
+                    # Send the result if not None
+                    if result is not None:
+                        await websocket.send(json.dumps({
+                            "type": "response",
+                            "data": result
+                        }))
+                except Exception as e:
+                    self.logger.error(f"Error in connect handler: {e}")
             
             # Handle messages
             async for message_raw in websocket:
@@ -338,11 +600,14 @@ class DaebusWebSocket:
                         }))
                         continue
                     
-                    # Create request and response objects
+                    # Create request and response objects for context (backward compatibility)
                     request = WebSocketRequest(client_id, message, websocket)
                     response = WebSocketResponse(websocket, client_id)
                     
-                    # Call the handler
+                    # Extract the data from the message
+                    data = message.get('data', {})
+                    
+                    # Call the handler with the context
                     from .context import set_context_type, _set_thread_local_request, _set_thread_local_response
                     set_context_type('websocket')
                     
@@ -356,8 +621,8 @@ class DaebusWebSocket:
                         _set_thread_local_request(request)
                         _set_thread_local_response(response)
                         
-                        # Call the handler with the request object
-                        result = handler(request)
+                        # Call the handler with (data, client_id)
+                        result = handler(data, client_id)
                         
                         # If the handler returns a value, send it as a response
                         if result is not None and not hasattr(result, '__await__'):
@@ -401,6 +666,18 @@ class DaebusWebSocket:
         finally:
             # Clean up the client
             self.clients.pop(client_id, None)
+            
+            # Handle 'disconnect' event if there's a handler
+            disconnect_handler = self.message_handlers.get('disconnect')
+            if disconnect_handler:
+                try:
+                    # Empty data for disconnect event
+                    disconnect_data = {}
+                    
+                    # Call the handler with (data, client_id)
+                    disconnect_handler(disconnect_data, client_id)
+                except Exception as e:
+                    self.logger.error(f"Error in disconnect handler: {e}")
             
             # Call disconnection handlers
             for handler in self.disconnection_handlers:

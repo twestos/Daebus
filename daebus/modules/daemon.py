@@ -335,21 +335,75 @@ class Daebus:
 
         Example:
             @app.socket("chat_message")
-            def handle_chat_message(req):
-                # Access message data with req.data
-                print(f"Got message: {req.data['message']}")
+            def handle_chat_message(req, sid):
+                # req is the raw message data
+                # sid is the client ID (session ID)
+                
+                message = req.get('message', '')
+                print(f"Got message from {sid}: {message}")
                 
                 # Return a response (will be sent automatically)
                 return {"status": "received"}
-                
-                # Or use self.websocket.send to send a response
-                # self.websocket.send({"status": "received"})
         """
         if not self.websocket:
             raise RuntimeError("No WebSocket component attached. "
                                "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
 
         return self.websocket.socket(message_type)
+        
+    def socket_connect(self):
+        """
+        Register a handler for WebSocket connect events.
+        
+        This is a shorthand for @app.socket('connect')
+        
+        Example:
+            @app.socket_connect()
+            def on_connect(req, sid):
+                print(f"Client {sid} connected")
+                return {"status": "connected"}
+        """
+        if not self.websocket:
+            raise RuntimeError("No WebSocket component attached. "
+                               "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
+                               
+        return self.websocket.socket_connect()
+        
+    def socket_disconnect(self):
+        """
+        Register a handler for WebSocket disconnect events.
+        
+        This is a shorthand for @app.socket('disconnect')
+        
+        Example:
+            @app.socket_disconnect()
+            def on_disconnect(req, sid):
+                print(f"Client {sid} disconnected")
+        """
+        if not self.websocket:
+            raise RuntimeError("No WebSocket component attached. "
+                               "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
+                               
+        return self.websocket.socket_disconnect()
+        
+    def socket_register(self):
+        """
+        Register a handler for WebSocket client registration events.
+        
+        This is a shorthand for @app.socket('register')
+        
+        Example:
+            @app.socket_register()
+            def on_register(req, sid):
+                user_data = req.get('user_data', {})
+                print(f"Client {sid} registered with data: {user_data}")
+                return {"status": "registered", "client_id": sid}
+        """
+        if not self.websocket:
+            raise RuntimeError("No WebSocket component attached. "
+                               "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
+                               
+        return self.websocket.socket_register()
 
     def run(self, service: str, debug: bool = False, redis_host: str = 'localhost', redis_port: int = 6379):
         # init

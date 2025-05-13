@@ -344,7 +344,8 @@ class ResponseProxy:
     PUBSUB_METHODS: List[str] = ['success', 'error', 'progress']
     
     # WebSocket-specific methods
-    WEBSOCKET_METHODS: List[str] = ['send', 'success', 'error', 'progress', 'broadcast']
+    WEBSOCKET_METHODS: List[str] = ['send', 'success', 'error', 'progress', 'broadcast_to_all',
+                                  'send_to_client', 'broadcast_to_clients']
 
     def __getattr__(self, name: str) -> Any:
         # First check for thread-local response
@@ -375,9 +376,15 @@ class ResponseProxy:
             raise AttributeError(f"Method '{name}' is not available in HTTP context")
         elif context_type == 'pubsub' and name in self.HTTP_METHODS and name not in self.PUBSUB_METHODS:
             raise AttributeError(f"Method '{name}' is not available in pub/sub context")
-        elif context_type == 'websocket' and name not in self.WEBSOCKET_METHODS:
-            raise AttributeError(f"Method '{name}' is not available in WebSocket context")
-
+        
+        # WebSocket context handling
+        if context_type == 'websocket':
+            # If we're in a WebSocket context, we want to handle some methods specially
+            if name in ['send', 'broadcast_to_all', 'send_to_client', 'broadcast_to_clients']:
+                # These methods should be forwarded to the websocket component
+                if hasattr(daemon, 'websocket') and daemon.websocket is not None:
+                    return getattr(daemon.websocket, name)
+                
         # Get the appropriate response object based on context
         response_obj = None
         try:
