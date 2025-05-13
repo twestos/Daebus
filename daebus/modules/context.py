@@ -42,23 +42,23 @@ def get_daemon() -> Any:
 
 def set_context_type(context_type: Optional[str]) -> None:
     """
-    Set the current context type (http or pubsub) in thread-local storage.
+    Set the current context type (http, pubsub, websocket) in thread-local storage.
 
     Args:
-        context_type: Either 'http', 'pubsub', or None
+        context_type: Either 'http', 'pubsub', 'websocket', or None
     """
-    if context_type is not None and context_type not in ('http', 'pubsub'):
+    if context_type is not None and context_type not in ('http', 'pubsub', 'websocket'):
         raise ValueError(
-            f"Invalid context type: {context_type}. Expected 'http', 'pubsub', or None")
+            f"Invalid context type: {context_type}. Expected 'http', 'pubsub', 'websocket', or None")
     _context.context_type = context_type
 
 
 def get_context_type() -> Optional[str]:
     """
-    Get the current context type (http or pubsub) from thread-local storage.
+    Get the current context type (http, pubsub, websocket) from thread-local storage.
 
     Returns:
-        str: The context type ('http', 'pubsub') or None if not set
+        str: The context type ('http', 'pubsub', 'websocket') or None if not set
     """
     return getattr(_context, 'context_type', None)
 
@@ -226,11 +226,11 @@ class _ContextObjectProxy:
 
 class RequestProxy:
     """
-    Proxy for request objects that supports both HTTP and pub/sub requests.
+    Proxy for request objects that supports HTTP, pub/sub, and WebSocket requests.
     Also supports thread-local request objects for concurrent processing.
     """
 
-    # Common attributes across both request types
+    # Common attributes across all request types
     COMMON_ATTRS: List[str] = ['payload', 'raw']
 
     # HTTP-specific attributes
@@ -238,6 +238,9 @@ class RequestProxy:
 
     # Pub/Sub-specific attributes
     PUBSUB_ATTRS: List[str] = ['reply_to', 'request_id', 'service']
+    
+    # WebSocket-specific attributes
+    WEBSOCKET_ATTRS: List[str] = ['client_id', 'message_type', 'data', 'websocket']
 
     def __getattr__(self, name: str) -> Any:
         # First check for thread-local request
@@ -256,7 +259,7 @@ class RequestProxy:
         context_type = get_context_type()
 
         # Provide better error messages for potentially misused attributes
-        if context_type == 'http' and name in self.PUBSUB_ATTRS:
+        if context_type == 'http' and name in self.PUBSUB_ATTRS + self.WEBSOCKET_ATTRS:
             # Special case for reply_to and request_id which may be accessed by generic code
             if name in ['reply_to', 'request_id']:
                 # These are allowed but will return None in HTTP context
@@ -264,12 +267,17 @@ class RequestProxy:
             else:
                 # Only log this at debug level
                 logger.debug(
-                    f"Accessing pub/sub-specific attribute '{name}' in HTTP context"
+                    f"Accessing non-HTTP attribute '{name}' in HTTP context"
                 )
-        elif context_type == 'pubsub' and name in self.HTTP_ATTRS:
+        elif context_type == 'pubsub' and name in self.HTTP_ATTRS + self.WEBSOCKET_ATTRS:
             # Only log this at debug level
             logger.debug(
-                f"Accessing HTTP-specific attribute '{name}' in pub/sub context"
+                f"Accessing non-pub/sub attribute '{name}' in pub/sub context"
+            )
+        elif context_type == 'websocket' and name in self.HTTP_ATTRS + self.PUBSUB_ATTRS:
+            # Only log this at debug level
+            logger.debug(
+                f"Accessing non-WebSocket attribute '{name}' in WebSocket context"
             )
 
         # Get the appropriate request object based on context
@@ -279,6 +287,13 @@ class RequestProxy:
                 if hasattr(daemon, 'request_http') and daemon.request_http is not None:
                     # Use HTTP-specific request
                     request_obj = daemon.request_http
+                elif hasattr(daemon, 'request') and daemon.request is not None:
+                    # Fall back to default request
+                    request_obj = daemon.request
+            elif context_type == 'websocket':
+                if hasattr(daemon, 'request_ws') and daemon.request_ws is not None:
+                    # Use WebSocket-specific request
+                    request_obj = daemon.request_ws
                 elif hasattr(daemon, 'request') and daemon.request is not None:
                     # Fall back to default request
                     request_obj = daemon.request
@@ -304,10 +319,13 @@ class RequestProxy:
                 hint = "This attribute is only available in HTTP context."
             elif name in self.PUBSUB_ATTRS:
                 hint = "This attribute is only available in pub/sub context."
+            elif name in self.WEBSOCKET_ATTRS:
+                hint = "This attribute is only available in WebSocket context."
             else:
                 hint = (f"Common attributes: {', '.join(self.COMMON_ATTRS)}. "
                         f"HTTP attributes: {', '.join(self.HTTP_ATTRS)}. "
-                        f"Pub/Sub attributes: {', '.join(self.PUBSUB_ATTRS)}.")
+                        f"Pub/Sub attributes: {', '.join(self.PUBSUB_ATTRS)}. "
+                        f"WebSocket attributes: {', '.join(self.WEBSOCKET_ATTRS)}.")
 
             raise AttributeError(
                 f"'{self.__class__.__name__}' object has no attribute '{name}'. {hint}")
@@ -315,7 +333,7 @@ class RequestProxy:
 
 class ResponseProxy:
     """
-    Proxy for response objects that supports both HTTP and pub/sub responses.
+    Proxy for response objects that supports HTTP, pub/sub, and WebSocket responses.
     Also supports thread-local response objects for concurrent processing.
     """
 
@@ -324,6 +342,9 @@ class ResponseProxy:
 
     # Pub/Sub-specific methods
     PUBSUB_METHODS: List[str] = ['success', 'error', 'progress']
+    
+    # WebSocket-specific methods
+    WEBSOCKET_METHODS: List[str] = ['send', 'success', 'error', 'progress', 'broadcast']
 
     def __getattr__(self, name: str) -> Any:
         # First check for thread-local response
@@ -338,7 +359,7 @@ class ResponseProxy:
         daemon = get_daemon()
         if daemon is None:
             # Special handling for common methods in tests
-            if name in self.PUBSUB_METHODS:
+            if name in self.PUBSUB_METHODS or name in self.WEBSOCKET_METHODS:
                 # Return a no-op function for test cases
                 def noop(*args, **kwargs):
                     logger.debug(f"No-op {name}() called")
@@ -349,17 +370,13 @@ class ResponseProxy:
             
         context_type = get_context_type()
 
-        # Validate method usage in the appropriate context
-        if context_type == 'http' and name in self.PUBSUB_METHODS:
-            raise AttributeError(
-                f"Method '{name}()' is for pub/sub responses and cannot be used in HTTP context. "
-                f"Use 'response.send()' for HTTP responses."
-            )
-        elif context_type == 'pubsub' and name in self.HTTP_METHODS:
-            raise AttributeError(
-                f"Method '{name}()' is for HTTP responses and cannot be used in pub/sub context. "
-                f"Use 'response.success()' or 'response.error()' for pub/sub responses."
-            )
+        # Check if method is allowed in current context
+        if context_type == 'http' and name in self.PUBSUB_METHODS and name not in self.HTTP_METHODS:
+            raise AttributeError(f"Method '{name}' is not available in HTTP context")
+        elif context_type == 'pubsub' and name in self.HTTP_METHODS and name not in self.PUBSUB_METHODS:
+            raise AttributeError(f"Method '{name}' is not available in pub/sub context")
+        elif context_type == 'websocket' and name not in self.WEBSOCKET_METHODS:
+            raise AttributeError(f"Method '{name}' is not available in WebSocket context")
 
         # Get the appropriate response object based on context
         response_obj = None
@@ -371,17 +388,28 @@ class ResponseProxy:
                 elif hasattr(daemon, 'response') and daemon.response is not None:
                     # Fall back to default response
                     response_obj = daemon.response
+            elif context_type == 'websocket':
+                if hasattr(daemon, 'response_ws') and daemon.response_ws is not None:
+                    # Use WebSocket-specific response
+                    response_obj = daemon.response_ws
+                elif hasattr(daemon, 'response') and daemon.response is not None:
+                    # Fall back to default response
+                    response_obj = daemon.response
             else:
                 # Use pub/sub response
                 if hasattr(daemon, 'response') and daemon.response is not None:
                     response_obj = daemon.response
                     
             if response_obj is not None:
-                return getattr(response_obj, name)
+                if hasattr(response_obj, name):
+                    return getattr(response_obj, name)
+                else:
+                    # Method not found on response object
+                    raise AttributeError(f"'{response_obj.__class__.__name__}' object has no attribute '{name}'")
                 
             # If we get here, no response object is available
             # Special handling for common response methods
-            if name in self.PUBSUB_METHODS:
+            if name in self.PUBSUB_METHODS or name in self.WEBSOCKET_METHODS:
                 # Return a no-op function for test cases
                 def noop(*args, **kwargs):
                     logger.debug(f"No-op {name}() called")
@@ -392,7 +420,7 @@ class ResponseProxy:
             
         except AttributeError:
             # Special handling for common response methods
-            if name in self.PUBSUB_METHODS:
+            if name in self.PUBSUB_METHODS or name in self.WEBSOCKET_METHODS:
                 # Return a no-op function for test cases
                 def noop(*args, **kwargs):
                     logger.debug(f"No-op {name}() called")
@@ -400,13 +428,16 @@ class ResponseProxy:
                 return noop
                 
             # Create a more helpful error message
-            if name in self.HTTP_METHODS:
+            if name in self.HTTP_METHODS and name not in self.WEBSOCKET_METHODS:
                 hint = "This method is only available in HTTP context."
-            elif name in self.PUBSUB_METHODS:
+            elif name in self.PUBSUB_METHODS and name not in self.WEBSOCKET_METHODS:
                 hint = "This method is only available in pub/sub context."
+            elif name in self.WEBSOCKET_METHODS and name not in self.HTTP_METHODS and name not in self.PUBSUB_METHODS:
+                hint = "This method is only available in WebSocket context."
             else:
                 hint = f"Available methods in HTTP context: {', '.join(self.HTTP_METHODS)}. " \
-                    f"Available methods in pub/sub context: {', '.join(self.PUBSUB_METHODS)}."
+                    f"Available methods in pub/sub context: {', '.join(self.PUBSUB_METHODS)}. " \
+                    f"Available methods in WebSocket context: {', '.join(self.WEBSOCKET_METHODS)}."
 
             raise AttributeError(
                 f"'{self.__class__.__name__}' object has no attribute '{name}'. {hint}")

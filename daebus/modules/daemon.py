@@ -31,6 +31,7 @@ class Daebus:
         self.response = None
         self._running = False   # Flag to control thread lifecycle
         self.http = None        # HTTP endpoint if attached
+        self.websocket = None   # WebSocket endpoint if attached
         self.max_workers = max_workers  # Maximum number of worker threads for message processing
         self.thread_pool = None  # Will be initialized in run()
 
@@ -40,6 +41,10 @@ class Daebus:
         # HTTP-specific request/response objects (set by HTTP handler)
         self.request_http = None
         self.response_http = None
+        
+        # WebSocket-specific request/response objects (set by WebSocket handler)
+        self.request_ws = None
+        self.response_ws = None
 
     def on_start(self):
         """
@@ -242,6 +247,34 @@ class Daebus:
                                "Use app.attach(DaebusHttp()) before defining routes.")
 
         return self.http.route(path, methods)
+
+    def socket(self, message_type: str):
+        """
+        Register a handler for a specific WebSocket message type.
+
+        Args:
+            message_type: The type of message to handle
+
+        Returns:
+            A decorator to wrap the message handler
+
+        Example:
+            @app.socket("chat_message")
+            def handle_chat_message(req):
+                # Access message data with req.data
+                print(f"Got message: {req.data['message']}")
+                
+                # Return a response (will be sent automatically)
+                return {"status": "received"}
+                
+                # Or use self.websocket.send to send a response
+                # self.websocket.send({"status": "received"})
+        """
+        if not self.websocket:
+            raise RuntimeError("No WebSocket component attached. "
+                               "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
+
+        return self.websocket.socket(message_type)
 
     def run(self, service: str, debug: bool = False, redis_host: str = 'localhost', redis_port: int = 6379):
         # init
