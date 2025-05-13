@@ -4,7 +4,6 @@ import json
 import threading
 import time
 import websockets
-from websockets.exceptions import ConnectionClosedError
 from unittest.mock import patch
 
 from daebus import Daebus, DaebusHttp, DaebusWebSocket
@@ -27,7 +26,6 @@ def test_websocket_e2e():
     stop_event = threading.Event()
     
     # Create a place to store test results
-    responses = []
     connected_event = threading.Event()
     
     # Create the app in a separate thread
@@ -40,8 +38,8 @@ def test_websocket_e2e():
              patch('daebus.modules.daemon.BackgroundScheduler'):
             
             # Attach HTTP and WebSocket components
-            http = app.attach(DaebusHttp(port=test_port))
-            ws = app.attach(DaebusWebSocket())
+            app.attach(DaebusHttp(port=test_port))
+            app.attach(DaebusWebSocket())
             
             # Register handlers
             @app.socket("ping")
@@ -62,7 +60,7 @@ def test_websocket_e2e():
             
             @app.websocket.on_connect
             def handle_connect(client_id):
-                nonlocal connected_event
+                # Set the connected event to signal client connection
                 connected_event.set()
                 # Don't broadcast on connect for cleaner testing
             
