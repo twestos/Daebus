@@ -147,12 +147,12 @@ def test_response_proxy_wrong_context():
     set_context_type('http')
     
     # Trying to call pub/sub method in HTTP context should raise AttributeError
-    with pytest.raises(AttributeError, match="Method 'success\\(\\)' is for pub/sub responses"):
+    with pytest.raises(AttributeError, match="Method 'success' is not available in HTTP context"):
         response.success({"result": "ok"})
         
     # Set context type to pub/sub
     set_context_type('pubsub')
     
     # Trying to call HTTP method in pub/sub context should raise AttributeError
-    with pytest.raises(AttributeError, match="Method 'send\\(\\)' is for HTTP responses"):
+    with pytest.raises(AttributeError, match="Method 'send' is not available in pub/sub context"):
         response.send({"status": "ok"}) 

@@ -4,6 +4,9 @@ __pycache__/
 
 # C extensions
 *.so
+node_modules/
+**node_modules
+**astro
 
 # Distribution / packaging
 bin/

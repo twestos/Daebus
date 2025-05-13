@@ -1,61 +1,44 @@
 # Daebus Tests
 
-This directory contains pytest tests for the Daebus package.
+This directory contains tests for the Daebus package.
+
+## Setup
+
+Install the test dependencies:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Running Tests
 
-To run the tests, make sure you have installed the test dependencies:
+Run all tests:
 
 ```bash
-# Install the package with development dependencies
-pip install -e ".[dev]"
-```
-
-Then, run pytest:
-
-```bash
-# Run all tests with coverage report
 pytest
-
-# Run specific test file
-pytest tests/test_daemon.py
-
-# Run specific test
-pytest tests/test_daemon.py::test_daebus_initialization
 ```
 
-## Test Structure
+Run tests for specific modules:
 
-The tests are organized by module:
+```bash
+pytest test_websocket.py
+```
 
-- `test_daemon.py`: Tests for the core Daebus class
-- `test_context.py`: Tests for the context module
-- `test_http.py`: Tests for the HTTP module
-- `test_pubsub.py`: Tests for the PubSub request/response
+## Test Types
 
-## Mocking Strategy
+### Unit Tests
 
-The tests use extensive mocking to avoid relying on external services like Redis. The approach is:
+- `test_websocket.py` - Unit tests for the WebSocket functionality
 
-1. In `conftest.py`, the `daebus_app` fixture sets up a properly mocked Daebus instance for most tests
-2. Individual tests may add their own mocks for specific functionality
-3. Redis-related functionality is mocked at the source, ensuring no actual Redis connections are attempted
-4. The `test_run_initialization` test is currently skipped as it requires complex mocking of the Redis client module
+### End-to-End Tests
 
-### Known Limitations
+- `test_websocket_e2e.py` - End-to-end tests that actually start a server and connect to it
 
-Some tests are currently skipped or don't achieve 100% coverage because:
+## Writing Tests
 
-1. The `redis_client` module uses a global instance pattern that is challenging to mock consistently
-2. The run loop in Daebus is an infinite loop with signal handling, making it difficult to test fully
-3. Some HTTP functionality relies on threading that can be complex to mock completely
+When writing tests for WebSocket functionality:
 
-## Adding New Tests
-
-When adding new tests, follow these guidelines:
-
-1. Create test files named `test_*.py`
-2. Use pytest fixtures from `conftest.py` when possible
-3. Mock external dependencies like Redis
-4. Keep tests isolated and focused on a single functionality
-5. Use descriptive function names with the `test_` prefix 
+1. Use `pytest.mark.asyncio` for tests that involve async operations
+2. Mock the Redis connection and scheduler to avoid external dependencies
+3. For WebSocket handlers, remember to setup the proper context
+4. Clean up contexts and connections properly after tests 
