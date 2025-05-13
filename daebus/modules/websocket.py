@@ -1,9 +1,8 @@
 import json
-import threading
 import traceback
 import asyncio
 import uuid
-from typing import Dict, Any, Callable, List, Set, Optional, Union
+from typing import Dict, Any, Callable, List, Optional, Union
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -32,19 +31,51 @@ class WebSocketResponse:
         self.websocket = websocket
         self.client_id = client_id
 
-    async def send(self, data: Any, message_type: str = "response") -> None:
+    async def send(self, data: Any, message_type: str = "response", target_sid: Optional[str] = None) -> None:
         """
         Send a message to the client.
 
         Args:
             data: The data to send
             message_type: The type of message (default: "response")
+            target_sid: Optional client ID to send to. If provided, sends to that client 
+                      instead of the current one. The client must be connected.
         """
         message = {
             "type": message_type,
             "data": data
         }
-        await self.websocket.send(json.dumps(message))
+        
+        if target_sid is not None and target_sid != self.client_id:
+            # Get the daemon to find the appropriate websocket server
+            from .context import get_daemon
+            daemon = get_daemon()
+            if daemon and daemon.websocket:
+                # Find the target client and send to it
+                if target_sid in daemon.websocket.clients:
+                    target_ws = daemon.websocket.clients[target_sid]
+                    await target_ws.send(json.dumps(message))
+                else:
+                    # Log a warning if client doesn't exist
+                    from .logger import logger
+                    logger.warning(f"Client {target_sid} not found, message not sent")
+        else:
+            # Send to the current client
+            await self.websocket.send(json.dumps(message))
+        
+    async def error(self, err: Union[Exception, str], message_type: str = "error", target_sid: Optional[str] = None) -> None:
+        """
+        Send an error message to the client.
+        
+        Args:
+            err: The error that occurred (Exception or string)
+            message_type: The type of message (default: "error")
+            target_sid: Optional client ID to send to. If provided, sends to that client
+                      instead of the current one. The client must be connected.
+        """
+        error_msg = str(err)
+        error_data = {"error": error_msg}
+        await self.send(error_data, message_type, target_sid)
 
 
 class DaebusWebSocket:

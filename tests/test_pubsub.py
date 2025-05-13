@@ -63,15 +63,15 @@ def test_pubsub_response_init():
     assert response._req is request
 
 
-def test_pubsub_response_success():
-    """Test PubSubResponse success method"""
+def test_pubsub_response_send():
+    """Test PubSubResponse send method"""
     redis_mock = MagicMock()
     request = MagicMock()
     request.request_id = "123"
     request.reply_to = "reply_channel"
     
     response = PubSubResponse(redis_mock, request)
-    response.success({"result": "ok"})
+    response.send({"result": "ok"})
     
     # Check that Redis publish was called with correct arguments
     redis_mock.publish.assert_called_once()
@@ -110,15 +110,18 @@ def test_pubsub_response_error():
     assert message_data["payload"]["error"] == "Something went wrong"
 
 
-def test_pubsub_response_progress():
-    """Test PubSubResponse progress method"""
+def test_pubsub_response_with_progress_format():
+    """Test PubSubResponse with progress format using send method"""
     redis_mock = MagicMock()
     request = MagicMock()
     request.request_id = "123"
     request.reply_to = "reply_channel"
     
     response = PubSubResponse(redis_mock, request)
-    response.progress({"status": "processing"}, 50)
+    
+    # Create progress-like format message, but using the send method with final=False
+    payload = {"status": "processing", "progress_percentage": 50}
+    response.send(payload, final=False)
     
     # Check that Redis publish was called with correct arguments
     redis_mock.publish.assert_called_once()
@@ -128,7 +131,7 @@ def test_pubsub_response_progress():
     
     # Parse the JSON message and check its contents
     message_data = json.loads(message)
-    assert message_data["status"] == "progress"
+    assert message_data["status"] == "success"  # Now uses success status with the send method
     assert message_data["request_id"] == "123"
     assert message_data["payload"]["status"] == "processing"
     assert message_data["payload"]["progress_percentage"] == 50
@@ -146,7 +149,7 @@ def test_pubsub_response_no_reply_channel():
     response = PubSubResponse(redis_mock, request)
     
     # When no reply_to is specified, it should use service.responses channel
-    response.success({"result": "ok"})
+    response.send({"result": "ok"})
     redis_mock.publish.assert_called_once()
     channel, _ = redis_mock.publish.call_args[0]
     assert channel == "test_service.responses" 

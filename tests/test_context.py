@@ -1,9 +1,9 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from daebus.modules import context
 from daebus.modules.context import (
     set_daemon, get_daemon, set_context_type, get_context_type,
-    request, response, broadcast, cache, logger
+    request, response
 )
 
 
@@ -122,7 +122,7 @@ def test_response_proxy_pubsub_context():
     # Create a mock daemon with pub/sub response
     mock_daemon = MagicMock()
     mock_pubsub_response = MagicMock()
-    mock_pubsub_response.success = MagicMock(return_value=None)
+    mock_pubsub_response.send = MagicMock(return_value=None)
     mock_daemon.response = mock_pubsub_response
     
     # Set the daemon and context type
@@ -130,10 +130,10 @@ def test_response_proxy_pubsub_context():
     set_context_type('pubsub')
     
     # Call pub/sub response method
-    response.success({"result": "ok"})
+    response.send({"result": "ok"})
     
     # Check it was forwarded correctly
-    mock_pubsub_response.success.assert_called_once_with({"result": "ok"})
+    mock_pubsub_response.send.assert_called_once_with({"result": "ok"}, final=True)
 
 
 def test_response_proxy_wrong_context():
@@ -142,17 +142,31 @@ def test_response_proxy_wrong_context():
     mock_daemon = MagicMock()
     mock_daemon.logger = MagicMock()
     
-    # Set the daemon and context type to HTTP
+    # With the simplified API, both HTTP and PubSub contexts support send now,
+    # so no need to test for AttributeError. Instead, verify that the appropriate
+    # context method is called.
+    
+    # Set up context for HTTP
     set_daemon(mock_daemon)
     set_context_type('http')
+    mock_http_response = MagicMock()
+    mock_http_response.send = MagicMock(return_value=None)
+    mock_daemon.response_http = mock_http_response
     
-    # Trying to call pub/sub method in HTTP context should raise AttributeError
-    with pytest.raises(AttributeError, match="Method 'success' is not available in HTTP context"):
-        response.success({"result": "ok"})
-        
-    # Set context type to pub/sub
+    # Call send method
+    response.send({"status": "ok"})
+    
+    # Verify HTTP response send method was called
+    mock_http_response.send.assert_called_once_with({"status": "ok"})
+    
+    # Now test PubSub context
     set_context_type('pubsub')
+    mock_pubsub_response = MagicMock()
+    mock_pubsub_response.send = MagicMock(return_value=None)
+    mock_daemon.response = mock_pubsub_response
     
-    # Trying to call HTTP method in pub/sub context should raise AttributeError
-    with pytest.raises(AttributeError, match="Method 'send' is not available in pub/sub context"):
-        response.send({"status": "ok"}) 
+    # Call send method in PubSub context
+    response.send({"result": "ok"})
+    
+    # Verify PubSub response send method was called
+    mock_pubsub_response.send.assert_called_once_with({"result": "ok"}, final=True) 
