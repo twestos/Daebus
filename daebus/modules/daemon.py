@@ -46,6 +46,81 @@ class Daebus:
         self.request_ws = None
         self.response_ws = None
 
+    def register_blueprint(self, blueprint):
+        """
+        Register a blueprint with the application.
+        
+        This registers all the actions, routes, listen handlers, socket handlers,
+        background tasks, thread tasks and on_start handlers from the blueprint
+        with the main application.
+        
+        Args:
+            blueprint: The Blueprint instance to register
+        
+        Returns:
+            self: For method chaining
+        """
+        # Register action handlers
+        for action_name, handler in blueprint.action_handlers.items():
+            if action_name in self.action_handlers:
+                self.logger.warning(f"Action '{action_name}' already registered, overriding")
+            self.action_handlers[action_name] = handler
+            self.logger.debug(f"Registered action handler '{action_name}' from blueprint '{blueprint.name}'")
+        
+        # Register routes if HTTP component is attached
+        if self.http:
+            for path, route_info in blueprint.routes.items():
+                if path in self.http.routes:
+                    self.logger.warning(f"Route '{path}' already registered, overriding")
+                self.http.routes[path] = route_info
+                self.logger.debug(f"Registered route '{path}' from blueprint '{blueprint.name}'")
+        elif blueprint.routes:
+            self.logger.warning(f"Blueprint '{blueprint.name}' has routes but no HTTP component is attached")
+        
+        # Register listen handlers
+        for channel, handler in blueprint.listen_handlers.items():
+            if channel in self.listen_handlers:
+                self.logger.warning(f"Listen handler for channel '{channel}' already registered, overriding")
+            self.listen_handlers[channel] = handler
+            self.logger.debug(f"Registered listen handler for channel '{channel}' from blueprint '{blueprint.name}'")
+        
+        # Register socket handlers if WebSocket component is attached
+        if self.websocket:
+            for message_type, handler in blueprint.socket_handlers.items():
+                if message_type in self.websocket.message_handlers:
+                    self.logger.warning(f"Socket handler for message type '{message_type}' already registered, overriding")
+                self.websocket.message_handlers[message_type] = handler
+                self.logger.debug(f"Registered socket handler for message type '{message_type}' from blueprint '{blueprint.name}'")
+        elif blueprint.socket_handlers:
+            self.logger.warning(f"Blueprint '{blueprint.name}' has socket handlers but no WebSocket component is attached")
+        
+        # Register background tasks
+        for task in blueprint.background_tasks:
+            name, interval, func = task
+            # Check for name conflicts
+            for existing_name, _, _ in self.background_tasks:
+                if existing_name == name:
+                    self.logger.warning(f"Background task '{name}' already registered, overriding")
+                    # Remove the existing task with the same name
+                    self.background_tasks = [t for t in self.background_tasks if t[0] != name]
+                    break
+            self.background_tasks.append(task)
+            self.logger.debug(f"Registered background task '{name}' from blueprint '{blueprint.name}'")
+        
+        # Register thread tasks
+        for name, task_info in blueprint.thread_tasks.items():
+            if name in self.thread_tasks:
+                self.logger.warning(f"Thread task '{name}' already registered, overriding")
+            self.thread_tasks[name] = task_info
+            self.logger.debug(f"Registered thread task '{name}' from blueprint '{blueprint.name}'")
+        
+        # Register on_start handlers
+        for handler in blueprint.on_start_handlers:
+            self._on_start_handlers.append(handler)
+            self.logger.debug(f"Registered on_start handler from blueprint '{blueprint.name}'")
+        
+        return self
+
     def on_start(self):
         """
         Register a function to run when the service starts up.
