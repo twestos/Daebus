@@ -326,13 +326,14 @@ class DaebusHttpHandler(BaseHTTPRequestHandler):
 
             # Convert data to JSON and encode as bytes
             try:
-                response = json.dumps(data).encode('utf-8')
+                # Pretty-print JSON with indentation for better command line readability
+                response = json.dumps(data, indent=2).encode('utf-8')
                 self.wfile.write(response)
             except (TypeError, ValueError) as e:
                 # Handle case where data is not JSON serializable
                 self.logger.error(f"Error serializing response to JSON: {e}")
                 error_response = json.dumps(
-                    {"error": "Internal server error"}).encode('utf-8')
+                    {"error": "Internal server error"}, indent=2).encode('utf-8')
                 self.wfile.write(error_response)
             except Exception as e:
                 self.logger.error(f"Error sending response: {e}")
