@@ -8,7 +8,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from .context import set_daemon, set_context_type
 from .pubsub import PubSubResponse, PubSubRequest, PubSubBroadcast
 from .logger import logger as _default_logger
-from .workflow import WorkflowRequest, WorkflowResponse  # Import the new workflow classes
 
 
 class Daebus:
@@ -682,63 +681,6 @@ class Daebus:
             # Clear daemon's request/response to prevent leaking between threads
             self.request = None
             self.response = None
-
-    def _process_workflow(self, message):
-        """
-        Process a workflow message in its own thread.
-        
-        This handles both initial workflow requests and subsequent messages.
-        """
-        try:
-            # Set context type for this thread 
-            set_context_type('pubsub')  # Use pubsub context type for workflows
-            
-            # Parse the message data from JSON
-            data = json.dumps(message["data"]) if isinstance(message["data"], dict) else message["data"]
-            data = json.loads(data)
-            
-            # Extract workflow ID and workflow name
-            workflow_id = data.get("workflow_id")
-            workflow_name = data.get("workflow")
-            
-            if not workflow_id:
-                self.logger.warning("Received workflow message without workflow_id")
-                return
-                
-            # Create workflow request and response objects
-            request = WorkflowRequest(data)
-            response = WorkflowResponse(self.redis, request)
-            
-            # Set thread-local request/response for this context
-            from .context import _set_thread_local_request, _set_thread_local_response
-            _set_thread_local_request(request)
-            _set_thread_local_response(response)
-            
-            # For new workflow requests, use the workflow handler
-            if workflow_name and workflow_name in self.workflow_handlers:
-                handler = self.workflow_handlers[workflow_name]
-                try:
-                    handler()
-                except Exception as e:
-                    self.logger.error(f"Error in workflow handler: {e}")
-                    self.logger.error(traceback.format_exc())
-                    # Send an error response
-                    response.send({"status": "error", "error": str(e)}, final=True)
-            else:
-                # For subsequent messages in an existing workflow,
-                # there's no specific handler to call - the workflow
-                # is maintained by the service itself and should check
-                # for new messages
-                self.logger.debug(f"Received update for workflow {workflow_id}")
-                # We could notify some kind of workflow manager here if needed
-            
-        except Exception as e:
-            self.logger.error(f"Error processing workflow message: {e}")
-            self.logger.error(traceback.format_exc())
-        finally:
-            # Clean up thread-local storage
-            from .context import _clear_thread_local_storage
-            _clear_thread_local_storage()
 
     def _pubsub_listener(self, pubsub_instance=None):
         """Listen for messages on the subscribed channels"""

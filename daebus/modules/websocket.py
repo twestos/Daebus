@@ -2,7 +2,10 @@ import json
 import traceback
 import asyncio
 import uuid
-from typing import Dict, Any, Callable, List, Optional, Union
+import time
+from typing import Dict, Any, Callable, List, Optional, Union, Set
+import asyncio
+from collections import defaultdict, deque
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -91,9 +94,21 @@ class DaebusWebSocket:
         self.connection_handlers: List[Callable] = []
         self.disconnection_handlers: List[Callable] = []
         self.clients: Dict[str, WebSocketServerProtocol] = {}
+        self.client_metadata: Dict[str, Dict[str, Any]] = {}  # Store extra client information
         self.client_counter = 0
         self.logger = _default_logger.getChild('websocket')
         self.client_id_generator = None  # Custom client ID generator function
+        
+        # Rate limiting settings
+        self.rate_limit_enabled = False
+        self.rate_limit_messages = 60  # Max messages per minute
+        self.rate_limit_window = 60    # Window size in seconds
+        self.rate_limit_counters = defaultdict(lambda: deque(maxlen=1000))  # Client message timestamps
+        
+        # Batched broadcasting
+        self._broadcast_queue = {}      # Message queue for batched broadcasts
+        self._broadcast_task = None     # Task for processing batched broadcasts
+        self._broadcast_interval = 0.1  # How often to process the broadcast queue (seconds)
 
     def attach(self, daemon: Any) -> None:
         """
@@ -137,6 +152,10 @@ class DaebusWebSocket:
             server = loop.run_until_complete(start_server)
             self.server = server
             
+            # Start the broadcast task if batched broadcasting is enabled
+            if self._broadcast_interval > 0:
+                self._broadcast_task = loop.create_task(self._process_broadcast_queue())
+            
             self.logger.info(f"WebSocket server listening on port {self.port}")
             
             # Keep the server running until the daemon is shut down
@@ -147,11 +166,32 @@ class DaebusWebSocket:
                 self.logger.error(f"Error in WebSocket server: {e}")
             finally:
                 # Clean up
-                server.close()
-                loop.run_until_complete(server.wait_closed())
-                loop.close()
-                self.is_running = False
-                self.logger.info("WebSocket server stopped")
+                try:
+                    # Cancel the broadcast task if it's running
+                    if self._broadcast_task is not None and not self._broadcast_task.done():
+                        self._broadcast_task.cancel()
+                        try:
+                            loop.run_until_complete(self._broadcast_task)
+                        except asyncio.CancelledError:
+                            pass
+                        self._broadcast_task = None
+                        
+                    # Gracefully disconnect clients
+                    if self.is_running:
+                        # Only perform graceful shutdown if we're still running
+                        # (if we're not running, it means shutdown was already called)
+                        client_count = self.disconnect_all_clients()
+                        self.logger.info(f"Disconnected {client_count} WebSocket clients during shutdown")
+                        
+                    # Close the server
+                    server.close()
+                    loop.run_until_complete(server.wait_closed())
+                except Exception as e:
+                    self.logger.error(f"Error during WebSocket server shutdown: {e}")
+                finally:
+                    loop.close()
+                    self.is_running = False
+                    self.logger.info("WebSocket server stopped")
 
     def socket(self, message_type: str):
         """
@@ -280,13 +320,16 @@ class DaebusWebSocket:
 
     # Core methods for sending messages
 
-    async def broadcast_to_all_async(self, data: Any, message_type: str = "broadcast") -> None:
+    async def broadcast_to_all_async(self, data: Any, message_type: str = "broadcast") -> int:
         """
         Broadcast a message to all connected clients asynchronously.
 
         Args:
             data: The data to send
             message_type: The type of message (default: "broadcast")
+            
+        Returns:
+            int: Number of clients that received the message successfully
         """
         message = {
             "type": message_type,
@@ -294,12 +337,22 @@ class DaebusWebSocket:
         }
         message_json = json.dumps(message)
         
+        # Count successful sends
+        success_count = 0
+        
         # Send to all clients
         for client_id, websocket in list(self.clients.items()):
             try:
                 await websocket.send(message_json)
+                success_count += 1
+            except ConnectionClosed:
+                # Connection is already closed, remove client
+                self.logger.debug(f"Client {client_id} connection closed, removing from clients list")
+                self.clients.pop(client_id, None)
             except Exception as e:
                 self.logger.warning(f"Failed to broadcast to client {client_id}: {e}")
+                
+        return success_count
 
     def _get_current_response(self) -> WebSocketResponse:
         """
@@ -356,13 +409,16 @@ class DaebusWebSocket:
         finally:
             loop.close()
         
-    def broadcast_to_all(self, data: Any, message_type: str = "broadcast") -> None:
+    def broadcast_to_all(self, data: Any, message_type: str = "broadcast") -> int:
         """
         Broadcast a message to all connected clients.
         
         Args:
             data: The data to send
             message_type: The type of message (default: "broadcast")
+            
+        Returns:
+            int: Number of clients the message was successfully sent to
         """
         # Check if we're already in an event loop
         try:
@@ -370,7 +426,7 @@ class DaebusWebSocket:
             if loop.is_running():
                 # We're in an event loop, create a task
                 loop.create_task(self.broadcast_to_all_async(data, message_type))
-                return
+                return len(self.clients)
         except RuntimeError:
             # No running event loop, use a new one
             pass
@@ -379,6 +435,7 @@ class DaebusWebSocket:
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(self.broadcast_to_all_async(data, message_type))
+            return len(self.clients)
         finally:
             loop.close()
         
@@ -560,6 +617,205 @@ class DaebusWebSocket:
         """
         return client_id in self.clients
 
+    def get_client_metadata(self, client_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get metadata about a specific client connection.
+        
+        Args:
+            client_id: The client ID to get metadata for
+            
+        Returns:
+            Dict containing client metadata or None if client not found
+        """
+        if client_id not in self.clients:
+            return None
+            
+        # Return stored metadata if available
+        if client_id in self.client_metadata:
+            # Add some derived fields
+            metadata = self.client_metadata[client_id].copy()
+            
+            # Calculate uptime
+            if "connected_at" in metadata:
+                metadata["uptime_seconds"] = time.time() - metadata["connected_at"]
+                
+            # Calculate idle time
+            if "last_activity" in metadata:
+                metadata["idle_seconds"] = time.time() - metadata["last_activity"]
+                
+            return metadata
+            
+        # If no stored metadata, fetch basic info from websocket
+        websocket = self.clients[client_id]
+        
+        try:
+            # Get basic connection info
+            remote_addr = websocket.remote_address if hasattr(websocket, 'remote_address') else None
+            path = websocket.path if hasattr(websocket, 'path') else None
+            secure = websocket.secure if hasattr(websocket, 'secure') else False
+            
+            metadata = {
+                "client_id": client_id,
+                "remote_address": remote_addr,
+                "path": path,
+                "secure": secure
+            }
+            
+            return metadata
+        except Exception as e:
+            self.logger.warning(f"Error getting metadata for client {client_id}: {e}")
+            return {"client_id": client_id, "error": str(e)}
+
+    def get_clients_by_filter(self, filter_func: Callable[[str, Dict[str, Any]], bool]) -> List[str]:
+        """
+        Get a list of client IDs that match a filter function.
+        
+        Args:
+            filter_func: A function that takes (client_id, metadata) and returns True/False
+            
+        Returns:
+            List of client IDs that match the filter
+            
+        Example:
+            # Get all clients connected for more than 5 minutes
+            old_clients = ws.get_clients_by_filter(
+                lambda cid, meta: time.time() - meta.get("connected_at", 0) > 300
+            )
+            
+            # Get all clients connected from a specific IP prefix
+            local_clients = ws.get_clients_by_filter(
+                lambda _, meta: meta.get("remote_address", [""])[0].startswith("192.168.")
+            )
+        """
+        result = []
+        
+        for client_id in self.clients:
+            metadata = self.get_client_metadata(client_id) or {}
+            if filter_func(client_id, metadata):
+                result.append(client_id)
+                
+        return result
+        
+    def disconnect_client(self, client_id: str, code: int = 1000, reason: str = "Server closed connection") -> bool:
+        """
+        Forcibly disconnect a client.
+        
+        Args:
+            client_id: The client ID to disconnect
+            code: WebSocket close code (default: 1000 - normal closure)
+            reason: Close reason message
+            
+        Returns:
+            True if the client was disconnected, False if it wasn't connected
+        """
+        if client_id not in self.clients:
+            return False
+            
+        websocket = self.clients[client_id]
+        
+        # Create a task to close the connection
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                loop.create_task(websocket.close(code=code, reason=reason))
+                return True
+        except RuntimeError:
+            # No running event loop
+            pass
+            
+        # Fall back to creating a new event loop if needed
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(websocket.close(code=code, reason=reason))
+            return True
+        except Exception as e:
+            self.logger.warning(f"Error disconnecting client {client_id}: {e}")
+            return False
+        finally:
+            loop.close()
+
+    def disconnect_all_clients(self, code: int = 1000, reason: str = "Server shutting down") -> int:
+        """
+        Disconnect all connected clients.
+        
+        Args:
+            code: WebSocket close code
+            reason: Close reason message
+            
+        Returns:
+            Number of clients disconnected
+        """
+        count = 0
+        
+        for client_id in list(self.clients.keys()):
+            if self.disconnect_client(client_id, code, reason):
+                count += 1
+                
+        return count
+        
+    def graceful_shutdown(self, timeout: float = 5.0, message: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Perform a graceful shutdown of the WebSocket server.
+        
+        This method:
+        1. Sends an optional shutdown message to all clients
+        2. Waits a moment for clients to receive it
+        3. Disconnects all clients
+        4. Closes the server
+        
+        Args:
+            timeout: Time to wait after sending shutdown message (seconds)
+            message: Optional message to send to all clients before disconnecting
+        """
+        if not self.is_running or not self.server:
+            self.logger.info("WebSocket server not running, nothing to shut down")
+            return
+            
+        self.logger.info(f"Starting graceful shutdown of WebSocket server with {len(self.clients)} connected clients")
+        
+        # Send shutdown message to all clients if provided
+        if message:
+            # Default shutdown message
+            default_message = {
+                "type": "server_shutdown",
+                "data": {
+                    "message": "Server is shutting down",
+                    "reconnect": False
+                }
+            }
+            
+            # Use provided message or default
+            shutdown_message = message if isinstance(message, dict) else default_message
+            
+            # Broadcast the message
+            self.broadcast_to_all(shutdown_message, message_type="server_shutdown")
+            
+            # Wait for the message to be delivered
+            if timeout > 0:
+                self.logger.info(f"Waiting {timeout} seconds for shutdown message delivery")
+                time.sleep(timeout)
+                
+        # Disconnect all clients
+        client_count = self.disconnect_all_clients()
+        self.logger.info(f"Disconnected {client_count} WebSocket clients")
+        
+        # Close the server
+        if self.server:
+            self.logger.info("Closing WebSocket server")
+            loop = asyncio.new_event_loop()
+            try:
+                self.server.close()
+                loop.run_until_complete(self.server.wait_closed())
+            except Exception as e:
+                self.logger.error(f"Error closing WebSocket server: {e}")
+            finally:
+                loop.close()
+                
+        # Mark as not running
+        self.is_running = False
+        self.server = None
+        self.logger.info("WebSocket server shutdown complete")
+
     # Internal methods
 
     async def _handle_connection(self, websocket: WebSocketServerProtocol, path: str) -> None:
@@ -576,6 +832,17 @@ class DaebusWebSocket:
         # Store the client
         self.clients[client_id] = websocket
         
+        # Store client metadata
+        self.client_metadata[client_id] = {
+            "connected_at": time.time(),
+            "path": path,
+            "remote_address": websocket.remote_address if hasattr(websocket, 'remote_address') else None,
+            "secure": websocket.secure if hasattr(websocket, 'secure') else False,
+            "messages_received": 0,
+            "messages_sent": 0,
+            "last_activity": time.time()
+        }
+        
         try:
             # Call connection handlers
             for handler in self.connection_handlers:
@@ -583,6 +850,7 @@ class DaebusWebSocket:
                     handler(client_id)
                 except Exception as e:
                     self.logger.error(f"Error in connection handler: {e}")
+                    self.logger.debug(traceback.format_exc())
             
             # Handle 'connect' event if there's a handler
             connect_handler = self.message_handlers.get('connect')
@@ -600,12 +868,36 @@ class DaebusWebSocket:
                             "type": "response",
                             "data": result
                         }))
+                        
+                        # Update message metrics
+                        if client_id in self.client_metadata:
+                            self.client_metadata[client_id]["messages_sent"] += 1
+                            self.client_metadata[client_id]["last_activity"] = time.time()
                 except Exception as e:
                     self.logger.error(f"Error in connect handler: {e}")
+                    self.logger.debug(traceback.format_exc())
             
             # Handle messages
             async for message_raw in websocket:
                 try:
+                    # Update message metrics
+                    if client_id in self.client_metadata:
+                        self.client_metadata[client_id]["messages_received"] += 1
+                        self.client_metadata[client_id]["last_activity"] = time.time()
+                    
+                    # Update rate limit counter
+                    self.record_message_received(client_id)
+                    
+                    # Check for rate limiting
+                    if self.is_rate_limited(client_id):
+                        # Client is rate limited, send error and skip processing
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "error": "Rate limit exceeded",
+                            "retry_after": self.rate_limit_window
+                        }))
+                        continue
+                        
                     # Parse the message
                     message = json.loads(message_raw)
                     
@@ -658,6 +950,11 @@ class DaebusWebSocket:
                         # If the handler returns a value, send it as a response
                         if result is not None and not hasattr(result, '__await__'):
                             await response.send(result)
+                            
+                            # Update message metrics
+                            if client_id in self.client_metadata:
+                                self.client_metadata[client_id]["messages_sent"] += 1
+                                self.client_metadata[client_id]["last_activity"] = time.time()
                         
                         # Handle async results
                         if hasattr(result, '__await__'):
@@ -665,11 +962,21 @@ class DaebusWebSocket:
                             if result_value is not None:
                                 await response.send(result_value)
                                 
+                                # Update message metrics
+                                if client_id in self.client_metadata:
+                                    self.client_metadata[client_id]["messages_sent"] += 1
+                                    self.client_metadata[client_id]["last_activity"] = time.time()
+                                
                     except Exception as e:
                         # Send error response on exception
                         self.logger.error(f"Error in message handler: {e}")
                         self.logger.error(traceback.format_exc())
                         await response.send({"error": str(e)}, "error")
+                        
+                        # Update message metrics
+                        if client_id in self.client_metadata:
+                            self.client_metadata[client_id]["messages_sent"] += 1
+                            self.client_metadata[client_id]["last_activity"] = time.time()
                     finally:
                         # Reset context and cleanup
                         from .context import _clear_thread_local_storage
@@ -685,18 +992,30 @@ class DaebusWebSocket:
                         "type": "error",
                         "error": "Invalid JSON"
                     }))
+                    
+                    # Update message metrics
+                    if client_id in self.client_metadata:
+                        self.client_metadata[client_id]["messages_sent"] += 1
+                        self.client_metadata[client_id]["last_activity"] = time.time()
                 except Exception as e:
                     # Log any other errors
                     self.logger.error(f"Error handling WebSocket message: {e}")
+                    self.logger.debug(traceback.format_exc())
         except ConnectionClosed:
             # Connection was closed, this is normal
             pass
         except Exception as e:
             # Log any other errors
             self.logger.error(f"Error in WebSocket connection: {e}")
+            self.logger.debug(traceback.format_exc())
         finally:
             # Clean up the client
             self.clients.pop(client_id, None)
+            self.client_metadata.pop(client_id, None)
+            
+            # Also clean up any rate limiting data
+            if client_id in self.rate_limit_counters:
+                del self.rate_limit_counters[client_id]
             
             # Handle 'disconnect' event if there's a handler
             disconnect_handler = self.message_handlers.get('disconnect')
@@ -709,10 +1028,186 @@ class DaebusWebSocket:
                     disconnect_handler(disconnect_data, client_id)
                 except Exception as e:
                     self.logger.error(f"Error in disconnect handler: {e}")
+                    self.logger.debug(traceback.format_exc())
             
             # Call disconnection handlers
             for handler in self.disconnection_handlers:
                 try:
                     handler(client_id)
                 except Exception as e:
-                    self.logger.error(f"Error in disconnection handler: {e}") 
+                    self.logger.error(f"Error in disconnection handler: {e}")
+                    self.logger.debug(traceback.format_exc())
+
+    def enable_rate_limiting(self, max_messages: int = 60, window_seconds: int = 60) -> None:
+        """
+        Enable rate limiting for clients to prevent abuse.
+        
+        Args:
+            max_messages: Maximum number of messages allowed in the time window
+            window_seconds: Time window in seconds
+        """
+        self.rate_limit_enabled = True
+        self.rate_limit_messages = max_messages
+        self.rate_limit_window = window_seconds
+        self.logger.info(f"Rate limiting enabled: {max_messages} messages per {window_seconds} seconds")
+        
+    def disable_rate_limiting(self) -> None:
+        """Disable rate limiting for clients."""
+        self.rate_limit_enabled = False
+        self.logger.info("Rate limiting disabled")
+        
+    def is_rate_limited(self, client_id: str) -> bool:
+        """
+        Check if a client is currently rate limited.
+        
+        Args:
+            client_id: The client ID to check
+            
+        Returns:
+            True if the client is rate limited, False otherwise
+        """
+        if not self.rate_limit_enabled:
+            return False
+            
+        # Get timestamp queue for this client
+        timestamps = self.rate_limit_counters[client_id]
+        
+        # No messages yet, not rate limited
+        if not timestamps:
+            return False
+            
+        # Calculate time window
+        now = time.time()
+        window_start = now - self.rate_limit_window
+        
+        # Count messages in the window
+        # First, remove old timestamps
+        while timestamps and timestamps[0] < window_start:
+            timestamps.popleft()
+            
+        # Then check if we're over the limit
+        return len(timestamps) >= self.rate_limit_messages
+        
+    def record_message_received(self, client_id: str) -> None:
+        """
+        Record that a client sent a message for rate limiting purposes.
+        
+        Args:
+            client_id: The client ID that sent a message
+        """
+        if not self.rate_limit_enabled:
+            return
+            
+        # Add current timestamp to the queue
+        self.rate_limit_counters[client_id].append(time.time())
+        
+    def enable_batched_broadcasting(self, interval: float = 0.1) -> None:
+        """
+        Enable batched broadcasting for more efficient message sending.
+        
+        This improves performance when sending many broadcasts in quick succession
+        by batching them together.
+        
+        Args:
+            interval: How often to process the broadcast queue, in seconds
+        """
+        self._broadcast_interval = interval
+        
+        # Start the broadcast task if we're running
+        if self.is_running and self._broadcast_task is None:
+            self._start_broadcast_task()
+            
+        self.logger.info(f"Batched broadcasting enabled with {interval}s interval")
+        
+    def _start_broadcast_task(self) -> None:
+        """Start the background task for processing the broadcast queue."""
+        async def process_broadcast_queue():
+            while self.is_running:
+                try:
+                    # Process all queued broadcasts
+                    queue_copy = self._broadcast_queue.copy()
+                    self._broadcast_queue.clear()
+                    
+                    # Send all queued messages
+                    for target, messages in queue_copy.items():
+                        if target == "_all_":
+                            # Broadcast to all clients
+                            for message_data, msg_type in messages:
+                                await self.broadcast_to_all_async(message_data, msg_type)
+                        elif isinstance(target, list):
+                            # Broadcast to multiple clients
+                            for message_data, msg_type in messages:
+                                await self.broadcast_to_clients_async(target, message_data, msg_type)
+                        else:
+                            # Send to a specific client
+                            client_id = target
+                            if client_id in self.clients:
+                                for message_data, msg_type in messages:
+                                    await self.send_to_client_async(client_id, message_data, msg_type)
+                                    
+                    # Wait for the next interval
+                    await asyncio.sleep(self._broadcast_interval)
+                except Exception as e:
+                    self.logger.error(f"Error in broadcast queue processing: {e}")
+                    await asyncio.sleep(1)  # Sleep longer on error
+        
+        # Create task in the running event loop
+        try:
+            loop = asyncio.get_running_loop()
+            self._broadcast_task = loop.create_task(process_broadcast_queue())
+        except RuntimeError:
+            # No running event loop, log a warning
+            self.logger.warning("No running event loop, batched broadcasting will be delayed until server is running")
+            
+    def queue_broadcast(self, data: Any, message_type: str = "broadcast", target: Union[str, List[str], None] = None) -> None:
+        """
+        Queue a broadcast message to be sent in the next batch.
+        
+        Args:
+            data: The data to send
+            message_type: The type of message
+            target: Optional target client ID(s) or None for all clients
+        """
+        # Determine the target key for the queue
+        target_key = "_all_" if target is None else target
+        
+        # Add to the queue
+        if target_key not in self._broadcast_queue:
+            self._broadcast_queue[target_key] = []
+            
+        self._broadcast_queue[target_key].append((data, message_type))
+        
+        # Start the broadcast task if needed
+        if self.is_running and self._broadcast_task is None:
+            self._start_broadcast_task()
+
+    async def _process_broadcast_queue(self) -> None:
+        """Process the broadcast queue in a background task."""
+        while self.is_running:
+            try:
+                # Process all queued broadcasts
+                queue_copy = self._broadcast_queue.copy()
+                self._broadcast_queue.clear()
+                
+                # Send all queued messages
+                for target, messages in queue_copy.items():
+                    if target == "_all_":
+                        # Broadcast to all clients
+                        for message_data, msg_type in messages:
+                            await self.broadcast_to_all_async(message_data, msg_type)
+                    elif isinstance(target, list):
+                        # Broadcast to multiple clients
+                        for message_data, msg_type in messages:
+                            await self.broadcast_to_clients_async(target, message_data, msg_type)
+                    else:
+                        # Send to a specific client
+                        client_id = target
+                        if client_id in self.clients:
+                            for message_data, msg_type in messages:
+                                await self.send_to_client_async(client_id, message_data, msg_type)
+                                
+                # Wait for the next interval
+                await asyncio.sleep(self._broadcast_interval)
+            except Exception as e:
+                self.logger.error(f"Error in broadcast queue processing: {e}")
+                await asyncio.sleep(1)  # Sleep longer on error 
