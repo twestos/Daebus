@@ -35,15 +35,15 @@ class TestWebSocket:
                 
                 # Register WebSocket message handlers
                 @app.socket("ping")
-                def handle_ping(req):
-                    return {"pong": True, "client_id": req.client_id}
+                def handle_ping(req, sid):
+                    return {"pong": True, "client_id": sid}
                 
                 @app.socket("echo")
-                def handle_echo(req):
-                    return req.data
+                def handle_echo(req, sid):
+                    return req
                 
                 @app.socket("multi_response")
-                def handle_multi(req):
+                def handle_multi(req, sid):
                     # Send an immediate response
                     app.websocket.send({"status": "processing"})
                     
@@ -51,10 +51,10 @@ class TestWebSocket:
                     return {"status": "complete"}
                 
                 @app.socket("broadcast")
-                def handle_broadcast(req):
+                def handle_broadcast(req, sid):
                     # Broadcast to all clients
                     app.websocket.broadcast_to_all(
-                        {"message": req.data.get("message", ""), "sender": req.client_id},
+                        {"message": req.get("message", ""), "sender": sid},
                         message_type="announcement"
                     )
                     return {"status": "broadcast_sent"}
@@ -108,13 +108,17 @@ class TestWebSocket:
         client_id = "test_client_1"
         app.websocket.clients[client_id] = mock_websocket
         
-        # Directly call the handler function
-        from daebus.modules.websocket import WebSocketRequest, WebSocketResponse
-        request = WebSocketRequest(client_id, json.loads(message), mock_websocket)
-        response = WebSocketResponse(mock_websocket, client_id)
+        # Parse message data
+        message_data = json.loads(message)
+        data = message_data.get("data", {})
         
-        # Call the handler
+        # Directly call the handler function with the new signature
         handler = app.websocket.message_handlers["ping"]
+        
+        # Setup context for backward compatibility
+        from daebus.modules.websocket import WebSocketRequest, WebSocketResponse
+        request = WebSocketRequest(client_id, message_data, mock_websocket)
+        response = WebSocketResponse(mock_websocket, client_id)
         
         # Setup context
         from daebus.modules.context import set_context_type, _set_thread_local_request, _set_thread_local_response
@@ -123,8 +127,8 @@ class TestWebSocket:
         _set_thread_local_response(response)
         
         try:
-            # Call the handler and process the result
-            result = handler(request)
+            # Call the handler with the new signature
+            result = handler(data, client_id)
             
             # If the handler returns a value, it should be sent as a response
             if result is not None and not hasattr(result, '__await__'):
@@ -173,13 +177,17 @@ class TestWebSocket:
         client_id = "test_client_2"
         app.websocket.clients[client_id] = mock_websocket
         
-        # Directly call the handler function
-        from daebus.modules.websocket import WebSocketRequest, WebSocketResponse
-        request = WebSocketRequest(client_id, json.loads(message), mock_websocket)
-        response = WebSocketResponse(mock_websocket, client_id)
+        # Parse message data
+        message_data = json.loads(message)
+        data = message_data.get("data", {})
         
-        # Call the handler
+        # Directly call the handler function with new signature
         handler = app.websocket.message_handlers["echo"]
+        
+        # Setup context for backward compatibility
+        from daebus.modules.websocket import WebSocketRequest, WebSocketResponse
+        request = WebSocketRequest(client_id, message_data, mock_websocket)
+        response = WebSocketResponse(mock_websocket, client_id)
         
         # Setup context
         from daebus.modules.context import set_context_type, _set_thread_local_request, _set_thread_local_response
@@ -188,8 +196,8 @@ class TestWebSocket:
         _set_thread_local_response(response)
         
         try:
-            # Call the handler and process the result
-            result = handler(request)
+            # Call the handler with the new signature
+            result = handler(data, client_id)
             
             # If the handler returns a value, it should be sent as a response
             if result is not None and not hasattr(result, '__await__'):
@@ -230,6 +238,7 @@ class TestWebSocket:
             "type": "multi_response",
             "data": {}
         }
+        data = message.get("data", {})
         
         # Setup mock for app.websocket.send
         def mock_send_sync(data, message_type="response"):
@@ -248,7 +257,7 @@ class TestWebSocket:
         # Patch the send method
         monkeypatch.setattr(app.websocket, "send", mock_send_sync)
         
-        # Create request and response objects
+        # Create request and response objects for backward compatibility
         client_id = "test_client_3"
         app.websocket.clients[client_id] = mock_websocket
         
@@ -269,9 +278,9 @@ class TestWebSocket:
         _set_thread_local_response(response)
         
         try:
-            # Call the handler
+            # Call the handler with new signature
             handler = app.websocket.message_handlers["multi_response"]
-            result = handler(request)
+            result = handler(data, client_id)
             
             # Handle the returned result
             if result is not None:
@@ -332,6 +341,7 @@ class TestWebSocket:
             "type": "broadcast",
             "data": {"message": broadcast_message}
         }
+        data = message.get("data", {})
         
         # Setup mock for app.websocket.broadcast_to_all
         def mock_broadcast_sync(data, message_type="broadcast"):
@@ -351,7 +361,7 @@ class TestWebSocket:
         # Patch the broadcast method
         monkeypatch.setattr(app.websocket, "broadcast_to_all", mock_broadcast_sync)
         
-        # Create request and response objects
+        # Create request and response objects for backward compatibility
         from daebus.modules.websocket import WebSocketRequest, WebSocketResponse
         request = WebSocketRequest(client_id1, message, mock_client1)
         response = WebSocketResponse(mock_client1, client_id1)
@@ -369,9 +379,9 @@ class TestWebSocket:
         _set_thread_local_response(response)
         
         try:
-            # Call the handler
+            # Call the handler with new signature
             handler = app.websocket.message_handlers["broadcast"]
-            result = handler(request)
+            result = handler(data, client_id1)
             
             # Handle the returned result
             if result is not None:

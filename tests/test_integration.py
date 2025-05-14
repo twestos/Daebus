@@ -64,7 +64,7 @@ class TestIntegration(unittest.TestCase):
             message_id = payload.get("id", "unknown")
             
             # Echo back the data
-            response = app.response.success({
+            response = app.response.send({
                 "echo": payload,
                 "id": message_id,
                 "timestamp": time.time()
@@ -84,7 +84,7 @@ class TestIntegration(unittest.TestCase):
             result = sum(numbers)
             
             # Return the result
-            response = app.response.success({
+            response = app.response.send({
                 "result": result,
                 "id": message_id,
                 "timestamp": time.time()
@@ -201,7 +201,7 @@ class TestIntegration(unittest.TestCase):
         # Test service A directly
         @service_a.action("test_a")
         def handle_test_a():
-            return service_a.response.success({"value": 42})
+            return service_a.response.send({"value": 42})
             
         # Create a message for service A
         message_a = {
@@ -219,7 +219,7 @@ class TestIntegration(unittest.TestCase):
         # Test service B directly
         @service_b.action("test_b")
         def handle_test_b():
-            return service_b.response.success({"result": 84})
+            return service_b.response.send({"result": 84})
             
         # Create a message for service B
         message_b = {
@@ -237,7 +237,7 @@ class TestIntegration(unittest.TestCase):
         # Test service C directly
         @service_c.action("test_c")
         def handle_test_c():
-            return service_c.response.success({"stored": True})
+            return service_c.response.send({"stored": True})
             
         # Create a message for service C
         message_c = {
@@ -259,7 +259,7 @@ class TestIntegration(unittest.TestCase):
         @service_a.action("get_data")
         def a_handle_get_data():
             request_id = service_a.request.payload.get("id", "unknown")
-            return service_a.response.success({
+            return service_a.response.send({
                 "data": {"value": 42},
                 "id": request_id
             })
@@ -269,7 +269,7 @@ class TestIntegration(unittest.TestCase):
             request_id = service_b.request.payload.get("id", "unknown")
             value = service_b.request.payload.get("value", 0)
             result = value * 2
-            return service_b.response.success({
+            return service_b.response.send({
                 "result": result,
                 "id": request_id
             })
@@ -278,7 +278,7 @@ class TestIntegration(unittest.TestCase):
         def c_handle_store_result():
             request_id = service_c.request.payload.get("id", "unknown")
             result = service_c.request.payload.get("result", 0)
-            return service_c.response.success({
+            return service_c.response.send({
                 "stored": True,
                 "id": request_id
             })

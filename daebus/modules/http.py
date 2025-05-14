@@ -7,10 +7,10 @@ import io
 import time
 import re
 import email.parser
-from typing import Dict, Any, Tuple, Optional, List, Union, Callable, Set
+from typing import Dict, Any, Tuple, Optional, List, Callable, Set, Union
 
 from .logger import logger as _default_logger
-from .context import set_context_type, get_context_type
+from .context import set_context_type
 
 
 class HttpRequest:
@@ -48,7 +48,7 @@ class HttpResponse:
     def send(self, data: Any, status_code: int = 200) -> Tuple[Any, int]:
         """
         Send an HTTP response with the specified data and status code.
-        This is the preferred method for HTTP responses.
+        This is the primary method for HTTP responses and follows the standardized interface.
 
         Args:
             data: The response data (will be JSON serialized)
@@ -61,36 +61,14 @@ class HttpResponse:
         self._status_code = status_code
         return data, status_code
 
-    def success(self, payload: Dict[str, Any], final: bool = True) -> Tuple[Dict[str, Any], int]:
-        """
-        Create a successful HTTP response.
-        This method is provided for compatibility with pub/sub handlers.
-        For HTTP-specific handlers, prefer using `send()`.
-
-        Args:
-            payload (dict): The response data
-            final (bool): Ignored in HTTP context
-
-        Returns:
-            tuple: (payload, status_code) for HTTP response
-        """
-        response_data = {
-            'status': 'success',
-            'payload': payload
-        }
-        self._response_data = response_data
-        self._status_code = 200
-        return payload, 200
-
-    def error(self, err: Exception, final: bool = True) -> Tuple[Dict[str, str], int]:
+    def error(self, err: Union[Exception, str], status_code: int = 400) -> Tuple[Dict[str, str], int]:
         """
         Create an error HTTP response.
-        This method is provided for compatibility with pub/sub handlers.
-        For HTTP-specific handlers, prefer using `send({"error": "message"}, 4xx)`.
+        This is the standardized error method across all contexts.
 
         Args:
-            err (Exception): The error that occurred
-            final (bool): Ignored in HTTP context
+            err: The error that occurred
+            status_code: HTTP status code (default: 400)
 
         Returns:
             tuple: (error_payload, status_code) for HTTP response
@@ -101,37 +79,8 @@ class HttpResponse:
             'error': error_msg
         }
         self._response_data = response_data
-        self._status_code = 400  # Bad request by default
-        return {'error': error_msg}, 400
-
-    def progress(self, payload: Dict[str, Any], progress_percentage: Optional[float] = None) -> Tuple[Dict[str, Any], int]:
-        """
-        Send a progress update. 
-
-        In HTTP context, this doesn't really make sense as HTTP is request/response,
-        but we provide this for API compatibility. It will simply return the payload
-        with progress information.
-
-        Args:
-            payload (dict): Progress information
-            progress_percentage (float, optional): Progress as a percentage (0-100)
-
-        Returns:
-            tuple: (payload, status_code) for HTTP response
-        """
-        if progress_percentage is not None:
-            payload = payload.copy()
-            payload['progress_percentage'] = min(
-                max(0, progress_percentage), 100)
-
-        response_data = {
-            'status': 'progress',
-            'payload': payload,
-            'final': False
-        }
-        self._response_data = response_data
-        self._status_code = 200
-        return payload, 200
+        self._status_code = status_code
+        return {'error': error_msg}, status_code
 
     def set_status(self, status_code: int) -> 'HttpResponse':
         """

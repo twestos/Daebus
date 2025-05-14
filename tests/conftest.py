@@ -57,11 +57,11 @@ def daebus_app(redis_for_tests):
     """
     Create a Daebus app instance for testing.
     """
-    # Need to patch both the redis_client module and Broadcast
+    # Need to patch both the redis_client module and PubSubBroadcast
     with patch('daebus.modules.redis_client.redis_client', redis_for_tests):
         with patch('daebus.modules.redis_client.get_redis_client', return_value=redis_for_tests):
-            # Also patch the Broadcast class to use our redis client directly
-            original_broadcast_init = patch('daebus.modules.broadcast.Broadcast.__init__', 
+            # Also patch the PubSubBroadcast class to use our redis client directly
+            original_broadcast_init = patch('daebus.modules.pubsub.PubSubBroadcast.__init__', 
                                           return_value=None)
             
             with original_broadcast_init:

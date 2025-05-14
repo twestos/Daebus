@@ -1,7 +1,4 @@
 import pytest
-from unittest.mock import MagicMock, patch
-from daebus import Daebus
-from daebus.modules.context import get_daemon
 
 
 def test_daebus_initialization(daebus_app):

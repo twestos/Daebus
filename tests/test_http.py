@@ -60,15 +60,17 @@ def test_http_response_send_with_status():
     assert response._status_code == 404
 
 
-def test_http_response_send_with_success():
-    """Test HttpResponse sending with success method"""
+def test_http_response_send_with_custom_data():
+    """Test HttpResponse sending custom data format"""
     handler = MagicMock()
     response = HttpResponse(handler)
     
-    result = response.success({'message': 'Success'})
+    # Previously we would use the success method for this, but now we use send
+    result = response.send({'message': 'Success'})
     
     assert result == ({'message': 'Success'}, 200)
     assert response._status_code == 200
+    assert response._response_data == {'message': 'Success'}
 
 
 @patch('daebus.modules.http.HTTPServer')

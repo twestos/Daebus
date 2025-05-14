@@ -2,15 +2,13 @@ import threading
 import time
 import json
 import concurrent.futures
-from redis import Redis, ResponseError
+import traceback
+from redis import Redis
 from apscheduler.schedulers.background import BackgroundScheduler
-
 from .context import set_daemon, set_context_type
-from .request import PubSubRequest
-from .response import PubSubResponse
-from .broadcast import Broadcast
-from .redis_client import redis_client
+from .pubsub import PubSubResponse, PubSubRequest, PubSubBroadcast
 from .logger import logger as _default_logger
+from .workflow import WorkflowRequest, WorkflowResponse  # Import the new workflow classes
 
 
 class Daebus:
@@ -25,7 +23,7 @@ class Daebus:
         self.pubsub = None
         self.scheduler = None
         self.logger = _default_logger.getChild(name)
-        self.broadcast = Broadcast()
+        self.broadcast = PubSubBroadcast()
         self.cache = None
         self.request = None
         self.response = None
@@ -34,6 +32,7 @@ class Daebus:
         self.websocket = None   # WebSocket endpoint if attached
         self.max_workers = max_workers  # Maximum number of worker threads for message processing
         self.thread_pool = None  # Will be initialized in run()
+        self.workflow_handlers = {}  # New dict for workflow handlers
 
         # Lifecycle hooks
         self._on_start_handlers = []
@@ -45,6 +44,81 @@ class Daebus:
         # WebSocket-specific request/response objects (set by WebSocket handler)
         self.request_ws = None
         self.response_ws = None
+
+    def register_blueprint(self, blueprint):
+        """
+        Register a blueprint with the application.
+        
+        This registers all the actions, routes, listen handlers, socket handlers,
+        background tasks, thread tasks and on_start handlers from the blueprint
+        with the main application.
+        
+        Args:
+            blueprint: The Blueprint instance to register
+        
+        Returns:
+            self: For method chaining
+        """
+        # Register action handlers
+        for action_name, handler in blueprint.action_handlers.items():
+            if action_name in self.action_handlers:
+                self.logger.warning(f"Action '{action_name}' already registered, overriding")
+            self.action_handlers[action_name] = handler
+            self.logger.debug(f"Registered action handler '{action_name}' from blueprint '{blueprint.name}'")
+        
+        # Register routes if HTTP component is attached
+        if self.http:
+            for path, route_info in blueprint.routes.items():
+                if path in self.http.routes:
+                    self.logger.warning(f"Route '{path}' already registered, overriding")
+                self.http.routes[path] = route_info
+                self.logger.debug(f"Registered route '{path}' from blueprint '{blueprint.name}'")
+        elif blueprint.routes:
+            self.logger.warning(f"Blueprint '{blueprint.name}' has routes but no HTTP component is attached")
+        
+        # Register listen handlers
+        for channel, handler in blueprint.listen_handlers.items():
+            if channel in self.listen_handlers:
+                self.logger.warning(f"Listen handler for channel '{channel}' already registered, overriding")
+            self.listen_handlers[channel] = handler
+            self.logger.debug(f"Registered listen handler for channel '{channel}' from blueprint '{blueprint.name}'")
+        
+        # Register socket handlers if WebSocket component is attached
+        if self.websocket:
+            for message_type, handler in blueprint.socket_handlers.items():
+                if message_type in self.websocket.message_handlers:
+                    self.logger.warning(f"Socket handler for message type '{message_type}' already registered, overriding")
+                self.websocket.message_handlers[message_type] = handler
+                self.logger.debug(f"Registered socket handler for message type '{message_type}' from blueprint '{blueprint.name}'")
+        elif blueprint.socket_handlers:
+            self.logger.warning(f"Blueprint '{blueprint.name}' has socket handlers but no WebSocket component is attached")
+        
+        # Register background tasks
+        for task in blueprint.background_tasks:
+            name, interval, func = task
+            # Check for name conflicts
+            for existing_name, _, _ in self.background_tasks:
+                if existing_name == name:
+                    self.logger.warning(f"Background task '{name}' already registered, overriding")
+                    # Remove the existing task with the same name
+                    self.background_tasks = [t for t in self.background_tasks if t[0] != name]
+                    break
+            self.background_tasks.append(task)
+            self.logger.debug(f"Registered background task '{name}' from blueprint '{blueprint.name}'")
+        
+        # Register thread tasks
+        for name, task_info in blueprint.thread_tasks.items():
+            if name in self.thread_tasks:
+                self.logger.warning(f"Thread task '{name}' already registered, overriding")
+            self.thread_tasks[name] = task_info
+            self.logger.debug(f"Registered thread task '{name}' from blueprint '{blueprint.name}'")
+        
+        # Register on_start handlers
+        for handler in blueprint.on_start_handlers:
+            self._on_start_handlers.append(handler)
+            self.logger.debug(f"Registered on_start handler from blueprint '{blueprint.name}'")
+        
+        return self
 
     def on_start(self):
         """
@@ -260,21 +334,110 @@ class Daebus:
 
         Example:
             @app.socket("chat_message")
-            def handle_chat_message(req):
-                # Access message data with req.data
-                print(f"Got message: {req.data['message']}")
+            def handle_chat_message(req, sid):
+                # req is the raw message data
+                # sid is the client ID (session ID)
+                
+                message = req.get('message', '')
+                print(f"Got message from {sid}: {message}")
                 
                 # Return a response (will be sent automatically)
                 return {"status": "received"}
-                
-                # Or use self.websocket.send to send a response
-                # self.websocket.send({"status": "received"})
         """
         if not self.websocket:
             raise RuntimeError("No WebSocket component attached. "
                                "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
 
         return self.websocket.socket(message_type)
+        
+    def socket_connect(self):
+        """
+        Register a handler for WebSocket connect events.
+        
+        This is a shorthand for @app.socket('connect')
+        
+        Example:
+            @app.socket_connect()
+            def on_connect(req, sid):
+                print(f"Client {sid} connected")
+                return {"status": "connected"}
+        """
+        if not self.websocket:
+            raise RuntimeError("No WebSocket component attached. "
+                               "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
+                               
+        return self.websocket.socket_connect()
+        
+    def socket_disconnect(self):
+        """
+        Register a handler for WebSocket disconnect events.
+        
+        This is a shorthand for @app.socket('disconnect')
+        
+        Example:
+            @app.socket_disconnect()
+            def on_disconnect(req, sid):
+                print(f"Client {sid} disconnected")
+        """
+        if not self.websocket:
+            raise RuntimeError("No WebSocket component attached. "
+                               "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
+                               
+        return self.websocket.socket_disconnect()
+        
+    def socket_register(self):
+        """
+        Register a handler for WebSocket client registration events.
+        
+        This is a shorthand for @app.socket('register')
+        
+        Example:
+            @app.socket_register()
+            def on_register(req, sid):
+                user_data = req.get('user_data', {})
+                print(f"Client {sid} registered with data: {user_data}")
+                return {"status": "registered", "client_id": sid}
+        """
+        if not self.websocket:
+            raise RuntimeError("No WebSocket component attached. "
+                               "Use app.attach(DaebusWebSocket()) before defining socket handlers.")
+                               
+        return self.websocket.socket_register()
+
+    def workflow(self, workflow_name: str):
+        """
+        Register a handler for a specific workflow type.
+        
+        Workflows allow for multi-step interactions between services where
+        responses may be sent multiple times and additional input might be
+        required during execution.
+        
+        Args:
+            workflow_name: The name of the workflow to handle
+            
+        Example:
+            @app.workflow("connect_wifi")
+            def connect_to_wifi():
+                ssid = request.payload.get("ssid")
+                logger.info(f"Connecting to WiFi network: {ssid}")
+                
+                # Send initial status
+                response.send({"status": "connecting", "message": f"Connecting to {ssid}..."})
+                
+                # Check if we need a password
+                if needs_password(ssid):
+                    response.send({"status": "need_password", "message": "Please provide WiFi password"})
+                    
+                    # The workflow will continue when client sends a message with the password
+                    # We'll handle that in the next request
+                    
+                # When done, send the final response
+                response.send({"status": "connected", "message": "Successfully connected"}, final=True)
+        """
+        def decorator(func):
+            self.workflow_handlers[workflow_name] = func
+            return func
+        return decorator
 
     def run(self, service: str, debug: bool = False, redis_host: str = 'localhost', redis_port: int = 6379):
         # init
@@ -330,6 +493,27 @@ class Daebus:
             service_thread = threading.Thread(
                 target=self._pubsub_listener, daemon=True)
             service_thread.start()
+
+        # Workflow channel handler for workflow messages
+        if self.workflow_handlers:
+            self.logger.info(
+                f"Setting up workflow channel handler for {len(self.workflow_handlers)} workflows")
+                
+            # Create a wrapped handler for workflow messages
+            def wrapped_workflow_handler(message):
+                # Submit the workflow message to the thread pool
+                self._submit_to_thread_pool(self._process_workflow, message)
+            
+            # Subscribe to the service's workflow channel
+            workflow_channel = f"{service}.workflows"
+            workflow_pubsub = self.redis.pubsub(ignore_subscribe_messages=True)
+            workflow_pubsub.subscribe(**{workflow_channel: wrapped_workflow_handler})
+            self.logger.info(f"Subscribed to workflow channel: {workflow_channel}")
+            
+            # Start the workflow handler thread
+            workflow_thread = threading.Thread(
+                target=lambda: self._pubsub_listener(workflow_pubsub), daemon=True)
+            workflow_thread.start()
 
         # Regular channel listeners
         channels_to_subscribe = {}
@@ -499,12 +683,62 @@ class Daebus:
             self.request = None
             self.response = None
 
-    def _main_service_handler(self, message):
+    def _process_workflow(self, message):
         """
-        Legacy method, kept for backward compatibility.
-        Now the _process_message method handles messages concurrently.
+        Process a workflow message in its own thread.
+        
+        This handles both initial workflow requests and subsequent messages.
         """
-        self._process_message(message)
+        try:
+            # Set context type for this thread 
+            set_context_type('pubsub')  # Use pubsub context type for workflows
+            
+            # Parse the message data from JSON
+            data = json.dumps(message["data"]) if isinstance(message["data"], dict) else message["data"]
+            data = json.loads(data)
+            
+            # Extract workflow ID and workflow name
+            workflow_id = data.get("workflow_id")
+            workflow_name = data.get("workflow")
+            
+            if not workflow_id:
+                self.logger.warning("Received workflow message without workflow_id")
+                return
+                
+            # Create workflow request and response objects
+            request = WorkflowRequest(data)
+            response = WorkflowResponse(self.redis, request)
+            
+            # Set thread-local request/response for this context
+            from .context import _set_thread_local_request, _set_thread_local_response
+            _set_thread_local_request(request)
+            _set_thread_local_response(response)
+            
+            # For new workflow requests, use the workflow handler
+            if workflow_name and workflow_name in self.workflow_handlers:
+                handler = self.workflow_handlers[workflow_name]
+                try:
+                    handler()
+                except Exception as e:
+                    self.logger.error(f"Error in workflow handler: {e}")
+                    self.logger.error(traceback.format_exc())
+                    # Send an error response
+                    response.send({"status": "error", "error": str(e)}, final=True)
+            else:
+                # For subsequent messages in an existing workflow,
+                # there's no specific handler to call - the workflow
+                # is maintained by the service itself and should check
+                # for new messages
+                self.logger.debug(f"Received update for workflow {workflow_id}")
+                # We could notify some kind of workflow manager here if needed
+            
+        except Exception as e:
+            self.logger.error(f"Error processing workflow message: {e}")
+            self.logger.error(traceback.format_exc())
+        finally:
+            # Clean up thread-local storage
+            from .context import _clear_thread_local_storage
+            _clear_thread_local_storage()
 
     def _pubsub_listener(self, pubsub_instance=None):
         """Listen for messages on the subscribed channels"""

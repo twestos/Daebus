@@ -58,17 +58,17 @@ def test_websocket_e2e():
             
             # Register handlers
             @app.socket("ping")
-            def handle_ping(req):
+            def handle_ping(req, sid):
                 return {"pong": True, "received_at": time.time()}
             
             @app.socket("echo")
-            def handle_echo(req):
-                return req.data
+            def handle_echo(req, sid):
+                return req
             
             @app.socket("broadcast")
-            def handle_broadcast(req):
+            def handle_broadcast(req, sid):
                 app.websocket.broadcast_to_all(
-                    {"message": req.data.get("message", ""), "from": req.client_id},
+                    {"message": req.get("message", ""), "from": sid},
                     message_type="announcement"
                 )
                 return {"status": "broadcast_sent"}
