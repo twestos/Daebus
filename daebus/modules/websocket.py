@@ -970,14 +970,16 @@ class DaebusWebSocket:
 
     # Internal methods
 
-    async def _handle_connection(self, websocket: WebSocketServerProtocol, path: str) -> None:
+    async def _handle_connection(self, websocket: WebSocketServerProtocol) -> None:
         """
         Handle a new WebSocket connection.
 
         Args:
             websocket: The WebSocket connection
-            path: The connection path
         """
+        # Get the path from the websocket object
+        path = getattr(websocket, 'path', '/')
+        
         # Generate a unique client ID
         client_id = self.generate_client_id(websocket, path)
         
