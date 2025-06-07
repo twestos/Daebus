@@ -108,7 +108,7 @@ class DaebusWebSocket:
         # Batched broadcasting
         self._broadcast_queue = {}      # Message queue for batched broadcasts
         self._broadcast_task = None     # Task for processing batched broadcasts
-        self._broadcast_interval = 0.1  # How often to process the broadcast queue (seconds)
+        self._broadcast_interval = 0    # Disabled by default to prevent startup issues
 
     def attach(self, daemon: Any) -> None:
         """
@@ -152,11 +152,12 @@ class DaebusWebSocket:
             server = loop.run_until_complete(start_server)
             self.server = server
             
+            self.logger.info(f"WebSocket server listening on port {self.port}")
+            
             # Start the broadcast task if batched broadcasting is enabled
+            # Do this AFTER the server is fully running
             if self._broadcast_interval > 0:
                 self._broadcast_task = loop.create_task(self._process_broadcast_queue())
-            
-            self.logger.info(f"WebSocket server listening on port {self.port}")
             
             # Keep the server running until the daemon is shut down
             async def keep_running():
@@ -541,20 +542,24 @@ class DaebusWebSocket:
             return False
             
         try:
-            # Use the daemon's thread pool to safely execute this
-            if self.daemon and hasattr(self.daemon, 'thread_pool') and self.daemon.thread_pool:
-                # Submit the send task to the daemon's thread pool
-                future = self.daemon.thread_pool.submit(self._safe_send_worker, client_id, data, message_type)
-                
-                # Wait a short time for the result, but don't block indefinitely
+            # First try using the daemon's thread pool if available and the daemon is fully initialized
+            if (self.daemon and 
+                hasattr(self.daemon, 'thread_pool') and 
+                self.daemon.thread_pool and
+                hasattr(self.daemon, '_running') and 
+                self.daemon._running):
                 try:
+                    # Submit the send task to the daemon's thread pool
+                    future = self.daemon.thread_pool.submit(self._safe_send_worker, client_id, data, message_type)
+                    
+                    # Wait a short time for the result, but don't block indefinitely
                     return future.result(timeout=1.0)
                 except Exception as e:
-                    self.logger.warning(f"Send task failed or timed out: {e}")
-                    return False
-            else:
-                # Fall back to creating a new event loop
-                return self._fallback_send_to_client(client_id, data, message_type)
+                    self.logger.debug(f"Thread pool send failed, falling back: {e}")
+                    # Fall through to fallback method
+            
+            # Fall back to creating a new event loop (safer during startup)
+            return self._fallback_send_to_client(client_id, data, message_type)
                 
         except Exception as e:
             self.logger.error(f"Error in safe_send_to_client: {e}")
@@ -567,13 +572,26 @@ class DaebusWebSocket:
         try:
             # Create a new event loop for this worker
             loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             
             try:
+                # Set this as the event loop for this thread
+                asyncio.set_event_loop(loop)
+                
                 # Run the async send
                 return loop.run_until_complete(self.send_to_client_async(client_id, data, message_type))
             finally:
-                loop.close()
+                # Always clean up the loop
+                try:
+                    # Cancel any remaining tasks
+                    pending = asyncio.all_tasks(loop)
+                    if pending:
+                        for task in pending:
+                            task.cancel()
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass  # Ignore cleanup errors
+                finally:
+                    loop.close()
         except Exception as e:
             self.logger.error(f"Error in send worker: {e}")
             return False
@@ -584,10 +602,25 @@ class DaebusWebSocket:
         """
         try:
             loop = asyncio.new_event_loop()
+            
             try:
+                # Set this as the event loop for this thread
+                asyncio.set_event_loop(loop)
+                
                 return loop.run_until_complete(self.send_to_client_async(client_id, data, message_type))
             finally:
-                loop.close()
+                # Always clean up the loop
+                try:
+                    # Cancel any remaining tasks
+                    pending = asyncio.all_tasks(loop)
+                    if pending:
+                        for task in pending:
+                            task.cancel()
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass  # Ignore cleanup errors
+                finally:
+                    loop.close()
         except Exception as e:
             self.logger.error(f"Error in fallback send: {e}")
             return False
@@ -1319,21 +1352,24 @@ class DaebusWebSocket:
             
         # Use a thread-safe approach by submitting to the WebSocket server's event loop
         try:
-            # Get the WebSocket server's event loop from the running thread
-            # We'll use the daemon's thread pool to safely execute this
-            if self.daemon and hasattr(self.daemon, 'thread_pool') and self.daemon.thread_pool:
-                # Submit the broadcast task to the daemon's thread pool
-                future = self.daemon.thread_pool.submit(self._safe_broadcast_worker, data, message_type)
-                
-                # Wait a short time for the result, but don't block indefinitely
+            # First try using the daemon's thread pool if available and the daemon is fully initialized
+            if (self.daemon and 
+                hasattr(self.daemon, 'thread_pool') and 
+                self.daemon.thread_pool and
+                hasattr(self.daemon, '_running') and 
+                self.daemon._running):
                 try:
+                    # Submit the broadcast task to the daemon's thread pool
+                    future = self.daemon.thread_pool.submit(self._safe_broadcast_worker, data, message_type)
+                    
+                    # Wait a short time for the result, but don't block indefinitely
                     return future.result(timeout=1.0)
                 except Exception as e:
-                    self.logger.warning(f"Broadcast task failed or timed out: {e}")
-                    return 0
-            else:
-                # Fall back to creating a new event loop (less ideal but safer)
-                return self._fallback_broadcast(data, message_type)
+                    self.logger.debug(f"Thread pool broadcast failed, falling back: {e}")
+                    # Fall through to fallback method
+            
+            # Fall back to creating a new event loop (safer during startup)
+            return self._fallback_broadcast(data, message_type)
                 
         except Exception as e:
             self.logger.error(f"Error in safe_broadcast_to_all: {e}")
@@ -1346,13 +1382,26 @@ class DaebusWebSocket:
         try:
             # Create a new event loop for this worker
             loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             
             try:
+                # Set this as the event loop for this thread
+                asyncio.set_event_loop(loop)
+                
                 # Run the async broadcast
                 return loop.run_until_complete(self.broadcast_to_all_async(data, message_type))
             finally:
-                loop.close()
+                # Always clean up the loop
+                try:
+                    # Cancel any remaining tasks
+                    pending = asyncio.all_tasks(loop)
+                    if pending:
+                        for task in pending:
+                            task.cancel()
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass  # Ignore cleanup errors
+                finally:
+                    loop.close()
         except Exception as e:
             self.logger.error(f"Error in broadcast worker: {e}")
             return 0
@@ -1363,10 +1412,25 @@ class DaebusWebSocket:
         """
         try:
             loop = asyncio.new_event_loop()
+            
             try:
+                # Set this as the event loop for this thread
+                asyncio.set_event_loop(loop)
+                
                 return loop.run_until_complete(self.broadcast_to_all_async(data, message_type))
             finally:
-                loop.close()
+                # Always clean up the loop
+                try:
+                    # Cancel any remaining tasks
+                    pending = asyncio.all_tasks(loop)
+                    if pending:
+                        for task in pending:
+                            task.cancel()
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass  # Ignore cleanup errors
+                finally:
+                    loop.close()
         except Exception as e:
             self.logger.error(f"Error in fallback broadcast: {e}")
             return 0 
