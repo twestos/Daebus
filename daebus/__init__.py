@@ -1,7 +1,7 @@
 __version__ = "0.0.24"
 
 from .modules.daemon import Daebus
-from .modules.context import request, response, broadcast, cache, logger
+from .modules.context import request, response, broadcast, cache, logger, get_daemon
 from .modules.caller import DaebusCaller
 from .modules.http import DaebusHttp, HttpRequest, HttpResponse
 from .modules.websocket import DaebusWebSocket, WebSocketRequest, WebSocketResponse
@@ -15,7 +15,7 @@ __all__ = [
     'DaebusHttp',
     'DaebusWebSocket',
     'Blueprint',
-    'request', 'response', 'broadcast', 'cache', 'logger', 'direct_logger',
+    'request', 'response', 'broadcast', 'cache', 'logger', 'direct_logger', 'get_daemon',
     'HttpRequest', 'HttpResponse', 'PubSubRequest', 'PubSubResponse',
     'WebSocketRequest', 'WebSocketResponse'
 ]

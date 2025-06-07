@@ -159,68 +159,86 @@ class DaebusWebSocket:
         # Add a thread for the WebSocket server
         @daemon.thread("websocket_server", auto_start=True)
         def run_websocket_server(running):
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Start the WebSocket server
-            start_server = websockets.serve(
-                self._handle_connection, 
-                "0.0.0.0", 
-                self.port
-            )
-            
-            # Mark as running
-            self.is_running = True
-            
-            # Run the server
-            server = loop.run_until_complete(start_server)
-            self.server = server
-            
-            self.logger.info(f"WebSocket server listening on port {self.port}")
-            
-            # Start the broadcast task if batched broadcasting is enabled
-            # Do this AFTER the server is fully running
-            if self._broadcast_interval > 0:
-                self._broadcast_task = loop.create_task(self._process_broadcast_queue())
-            
-            # Keep the server running until the daemon is shut down
-            async def keep_running():
-                while running() and self.is_running:
-                    await asyncio.sleep(1)
-            
-            try:
-                loop.run_until_complete(keep_running())
-            except Exception as e:
-                self.logger.error(f"Error in WebSocket server: {e}")
-            finally:
-                # Clean up
+            async def websocket_main():
+                """Main async function for the WebSocket server"""
+                server = None
+                
                 try:
-                    # Cancel the broadcast task if it's running
-                    if self._broadcast_task is not None and not self._broadcast_task.done():
-                        self._broadcast_task.cancel()
+                    # Start the WebSocket server
+                    server = await websockets.serve(
+                        self._handle_connection, 
+                        "0.0.0.0", 
+                        self.port
+                    )
+                    
+                    # Store server reference for external access
+                    self.server = server
+                    
+                    # Only mark as running AFTER the server is successfully started
+                    self.is_running = True
+                    
+                    self.logger.info(f"WebSocket server listening on port {self.port}")
+                    
+                    # Start the broadcast task if batched broadcasting is enabled
+                    broadcast_task = None
+                    if self._broadcast_interval > 0:
                         try:
-                            loop.run_until_complete(self._broadcast_task)
-                        except asyncio.CancelledError:
-                            pass
+                            broadcast_task = asyncio.create_task(self._process_broadcast_queue())
+                            self._broadcast_task = broadcast_task
+                        except Exception as e:
+                            self.logger.warning(f"Failed to start broadcast task: {e}")
+                            broadcast_task = None
+                    
+                    # Keep the server running until the daemon is shut down
+                    try:
+                        while running() and self.is_running:
+                            await asyncio.sleep(1)
+                    finally:
+                        # Mark as not running first
+                        self.is_running = False
+                        
+                        # Cancel broadcast task if running
+                        if broadcast_task is not None and not broadcast_task.done():
+                            broadcast_task.cancel()
+                            try:
+                                await broadcast_task
+                            except asyncio.CancelledError:
+                                pass
+                            except Exception as e:
+                                self.logger.debug(f"Error cancelling broadcast task: {e}")
+                        
                         self._broadcast_task = None
                         
-                    # Gracefully disconnect clients
-                    if self.is_running:
-                        # Only perform graceful shutdown if we're still running
-                        # (if we're not running, it means shutdown was already called)
-                        client_count = self.disconnect_all_clients()
-                        self.logger.info(f"Disconnected {client_count} WebSocket clients during shutdown")
+                        # Close the server
+                        if server is not None:
+                            server.close()
+                            await server.wait_closed()
                         
-                    # Close the server
-                    server.close()
-                    loop.run_until_complete(server.wait_closed())
                 except Exception as e:
-                    self.logger.error(f"Error during WebSocket server shutdown: {e}")
+                    self.logger.error(f"Error in WebSocket server: {e}")
+                    import traceback
+                    self.logger.debug(traceback.format_exc())
+                    raise
                 finally:
-                    loop.close()
                     self.is_running = False
-                    self.logger.info("WebSocket server stopped")
+                    
+            # Run the async main function using asyncio.run()
+            try:
+                asyncio.run(websocket_main())
+            except Exception as e:
+                self.logger.error(f"Failed to start WebSocket server: {e}")
+                import traceback
+                self.logger.debug(traceback.format_exc())
+            finally:
+                # Final cleanup - disconnect clients using a separate event loop
+                try:
+                    client_count = self.disconnect_all_clients()
+                    if client_count > 0:
+                        self.logger.info(f"Disconnected {client_count} WebSocket clients during shutdown")
+                except Exception as e:
+                    self.logger.debug(f"Error disconnecting clients during final cleanup: {e}")
+                    
+                self.logger.info("WebSocket server stopped")
 
     def socket(self, message_type: str):
         """
