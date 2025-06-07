@@ -391,8 +391,17 @@ class DaebusWebSocket:
         Args:
             data: The data to send
             message_type: The type of message (default: "response")
+            
+        Note: This method requires being called from within a WebSocket message handler context.
+        For sending messages from callbacks or other contexts, use safe_broadcast_to_all() or 
+        safe_send_to_client() instead.
         """
-        response = self._get_current_response()
+        try:
+            response = self._get_current_response()
+        except RuntimeError as e:
+            self.logger.error(f"Cannot send message: {e}")
+            self.logger.error("Use safe_broadcast_to_all() or safe_send_to_client() for sending from callbacks")
+            return
         
         # Check if we're already in an event loop
         try:
@@ -507,7 +516,82 @@ class DaebusWebSocket:
             return loop.run_until_complete(self.send_to_client_async(client_id, data, message_type))
         finally:
             loop.close()
-    
+
+    def safe_send_to_client(self, client_id: str, data: Any, message_type: str = "message") -> bool:
+        """
+        Thread-safe method to send a message to a specific client.
+        
+        This method is specifically designed to be called from callbacks,
+        background tasks, or other non-WebSocket contexts.
+        
+        Args:
+            client_id: The ID of the client to send to
+            data: The data to send
+            message_type: The type of message (default: "message")
+            
+        Returns:
+            bool: True if the message was sent, False if the client is not connected
+        """
+        if not self.is_running:
+            self.logger.debug("WebSocket server not running")
+            return False
+            
+        if client_id not in self.clients:
+            self.logger.warning(f"Cannot send to client {client_id}: Client not connected")
+            return False
+            
+        try:
+            # Use the daemon's thread pool to safely execute this
+            if self.daemon and hasattr(self.daemon, 'thread_pool') and self.daemon.thread_pool:
+                # Submit the send task to the daemon's thread pool
+                future = self.daemon.thread_pool.submit(self._safe_send_worker, client_id, data, message_type)
+                
+                # Wait a short time for the result, but don't block indefinitely
+                try:
+                    return future.result(timeout=1.0)
+                except Exception as e:
+                    self.logger.warning(f"Send task failed or timed out: {e}")
+                    return False
+            else:
+                # Fall back to creating a new event loop
+                return self._fallback_send_to_client(client_id, data, message_type)
+                
+        except Exception as e:
+            self.logger.error(f"Error in safe_send_to_client: {e}")
+            return False
+            
+    def _safe_send_worker(self, client_id: str, data: Any, message_type: str) -> bool:
+        """
+        Worker function that runs in the thread pool to safely send messages.
+        """
+        try:
+            # Create a new event loop for this worker
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                # Run the async send
+                return loop.run_until_complete(self.send_to_client_async(client_id, data, message_type))
+            finally:
+                loop.close()
+        except Exception as e:
+            self.logger.error(f"Error in send worker: {e}")
+            return False
+            
+    def _fallback_send_to_client(self, client_id: str, data: Any, message_type: str) -> bool:
+        """
+        Fallback send method when thread pool is not available.
+        """
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(self.send_to_client_async(client_id, data, message_type))
+            finally:
+                loop.close()
+        except Exception as e:
+            self.logger.error(f"Error in fallback send: {e}")
+            return False
+
     async def broadcast_to_clients_async(self, client_ids: List[str], data: Any, message_type: str = "message") -> Dict[str, bool]:
         """
         Broadcast a message to a specific set of clients asynchronously.
@@ -1214,3 +1298,75 @@ class DaebusWebSocket:
             except Exception as e:
                 self.logger.error(f"Error in broadcast queue processing: {e}")
                 await asyncio.sleep(1)  # Sleep longer on error 
+
+    def safe_broadcast_to_all(self, data: Any, message_type: str = "broadcast") -> int:
+        """
+        Thread-safe broadcast method that can be called from any context.
+        
+        This method is specifically designed to be called from callbacks,
+        background tasks, or other non-WebSocket contexts.
+        
+        Args:
+            data: The data to send
+            message_type: The type of message (default: "broadcast")
+            
+        Returns:
+            int: Number of clients the message was successfully sent to
+        """
+        if not self.is_running or not self.clients:
+            self.logger.debug("WebSocket server not running or no clients connected")
+            return 0
+            
+        # Use a thread-safe approach by submitting to the WebSocket server's event loop
+        try:
+            # Get the WebSocket server's event loop from the running thread
+            # We'll use the daemon's thread pool to safely execute this
+            if self.daemon and hasattr(self.daemon, 'thread_pool') and self.daemon.thread_pool:
+                # Submit the broadcast task to the daemon's thread pool
+                future = self.daemon.thread_pool.submit(self._safe_broadcast_worker, data, message_type)
+                
+                # Wait a short time for the result, but don't block indefinitely
+                try:
+                    return future.result(timeout=1.0)
+                except Exception as e:
+                    self.logger.warning(f"Broadcast task failed or timed out: {e}")
+                    return 0
+            else:
+                # Fall back to creating a new event loop (less ideal but safer)
+                return self._fallback_broadcast(data, message_type)
+                
+        except Exception as e:
+            self.logger.error(f"Error in safe_broadcast_to_all: {e}")
+            return 0
+            
+    def _safe_broadcast_worker(self, data: Any, message_type: str) -> int:
+        """
+        Worker function that runs in the thread pool to safely broadcast messages.
+        """
+        try:
+            # Create a new event loop for this worker
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                # Run the async broadcast
+                return loop.run_until_complete(self.broadcast_to_all_async(data, message_type))
+            finally:
+                loop.close()
+        except Exception as e:
+            self.logger.error(f"Error in broadcast worker: {e}")
+            return 0
+            
+    def _fallback_broadcast(self, data: Any, message_type: str) -> int:
+        """
+        Fallback broadcast method when thread pool is not available.
+        """
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(self.broadcast_to_all_async(data, message_type))
+            finally:
+                loop.close()
+        except Exception as e:
+            self.logger.error(f"Error in fallback broadcast: {e}")
+            return 0 
