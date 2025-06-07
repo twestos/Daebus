@@ -109,6 +109,9 @@ class DaebusWebSocket:
         self._broadcast_queue = {}      # Message queue for batched broadcasts
         self._broadcast_task = None     # Task for processing batched broadcasts
         self._broadcast_interval = 0    # Disabled by default to prevent startup issues
+        
+        # Actual port being used (may differ from self.port if there's a conflict)
+        self.actual_port = None
 
     def attach(self, daemon: Any) -> None:
         """
@@ -119,18 +122,40 @@ class DaebusWebSocket:
         """
         self.daemon = daemon
         
-        # We need to make sure the HTTP server is also attached to use its port
-        if not daemon.http:
-            raise RuntimeError("DaebusWebSocket requires DaebusHttp to be attached first. "
-                               "Use app.attach(DaebusHttp()) before app.attach(DaebusWebSocket()).")
-        
-        # Use HTTP server's port if one wasn't specified
-        if self.port is None:
-            self.port = daemon.http.port
-        
         # Store self on the daemon
         daemon.websocket = self
         
+        if daemon.http:
+            # HTTP server exists - use a different port to avoid conflicts
+            if self.port is None:
+                # Use HTTP port + 1 as default
+                self.port = daemon.http.port + 1
+                self.logger.info(f"WebSocket will use port {self.port} (HTTP port + 1)")
+            elif self.port == daemon.http.port:
+                # Same port specified - use different port
+                self.port = daemon.http.port + 1
+                self.logger.warning(f"WebSocket port conflict detected. Using port {self.port} instead of {daemon.http.port}")
+            
+            self.logger.info("For same-port WebSocket support, connect to:")
+            self.logger.info(f"  HTTP:      http://your-server:{daemon.http.port}")
+            self.logger.info(f"  WebSocket: ws://your-server:{self.port}")
+        else:
+            # No HTTP server - require explicit port configuration
+            if self.port is None:
+                raise RuntimeError(
+                    "WebSocket port must be specified when no HTTP server is attached. "
+                    "Use DaebusWebSocket(port=YOUR_PORT) or attach an HTTP server first."
+                )
+        
+        self.actual_port = self.port
+        
+        # Start the WebSocket server
+        self._start_websocket_server(daemon)
+
+    def _start_websocket_server(self, daemon: Any) -> None:
+        """
+        Start the WebSocket server.
+        """
         # Add a thread for the WebSocket server
         @daemon.thread("websocket_server", auto_start=True)
         def run_websocket_server(running):
@@ -321,6 +346,18 @@ class DaebusWebSocket:
         
         # Default UUID generator
         return f"user_{str(uuid.uuid4())}"
+
+    def get_websocket_port(self) -> Optional[int]:
+        """
+        Get the actual port the WebSocket server is configured to use.
+        
+        This may be different from the originally requested port if there was a conflict
+        with the HTTP server.
+        
+        Returns:
+            int: The WebSocket server port, or None if not configured
+        """
+        return self.actual_port
 
     # Core methods for sending messages
 

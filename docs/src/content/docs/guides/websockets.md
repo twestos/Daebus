@@ -16,19 +16,111 @@ from daebus import Daebus, DaebusHttp, DaebusWebSocket
 
 app = Daebus(__name__)
 
-# First, set up HTTP (required for WebSockets)
+# First, set up HTTP server
 http = DaebusHttp(port=8080)
 app.attach(http)
 
 # Then, add WebSocket support
-websocket = DaebusWebSocket()  # Uses the same port as HTTP by default
+websocket = DaebusWebSocket()  # Will automatically use port 8081 (HTTP port + 1)
 app.attach(websocket)
 
 # Define message handlers and start the application
 app.run(service="realtime_service")
 ```
 
-> **Note**: WebSockets require HTTP to be attached first, as they share the same server infrastructure.
+### 🔌 Port Configuration
+
+**Important**: When both HTTP and WebSocket servers are used together, they run on **separate ports** to prevent conflicts:
+
+- **HTTP Server**: Runs on the port you specify (e.g., `8080`)
+- **WebSocket Server**: Automatically runs on **HTTP port + 1** (e.g., `8081`)
+
+The system will log the actual ports being used when you start your application:
+
+```
+INFO [daebus.websocket] WebSocket will use port 8081 (HTTP port + 1)
+INFO [daebus.websocket] For same-port WebSocket support, connect to:
+INFO [daebus.websocket]   HTTP:      http://your-server:8080
+INFO [daebus.websocket]   WebSocket: ws://your-server:8081
+```
+
+#### Port Options
+
+You have several configuration options:
+
+```python
+# Option 1: Automatic port assignment (recommended)
+http = DaebusHttp(port=8080)
+websocket = DaebusWebSocket()  # Will use port 8081
+
+# Option 2: Explicit WebSocket port
+http = DaebusHttp(port=8080)
+websocket = DaebusWebSocket(port=9000)  # Use port 9000 for WebSocket
+
+# Option 3: WebSocket only (no HTTP)
+websocket = DaebusWebSocket(port=8080)  # Must specify port when no HTTP server
+```
+
+#### Discovering the WebSocket Port
+
+You can programmatically get the WebSocket port:
+
+```python
+# After attaching the WebSocket component
+app.attach(websocket)
+
+# Get the actual port being used
+ws_port = app.websocket.get_websocket_port()
+print(f"WebSocket server running on port: {ws_port}")
+
+# Use this in your client connection URLs
+websocket_url = f"ws://your-server:{ws_port}"
+```
+
+#### Complete Example: HTTP + WebSocket Setup
+
+Here's a complete example showing both servers with clear port usage:
+
+```python
+from daebus import Daebus, DaebusHttp, DaebusWebSocket
+
+app = Daebus(__name__)
+
+# HTTP server on port 5000
+http = DaebusHttp(port=5000)
+app.attach(http)
+
+# WebSocket server will automatically use port 5001
+websocket = DaebusWebSocket()
+app.attach(websocket)
+
+# HTTP route
+@app.route("/api/status")
+def get_status(req):
+    return {"status": "healthy", "websocket_port": app.websocket.get_websocket_port()}
+
+# WebSocket handler
+@app.socket("ping")
+def handle_ping(data, client_id):
+    return {"pong": True}
+
+if __name__ == "__main__":
+    print("Starting servers:")
+    print("  HTTP:      http://localhost:5000")
+    print("  WebSocket: ws://localhost:5001")
+    app.run(service="my_service")
+```
+
+**Client connections:**
+```javascript
+// HTTP API calls
+fetch('http://localhost:5000/api/status')
+
+// WebSocket connection
+const socket = new WebSocket('ws://localhost:5001');
+```
+
+> **Note**: If you try to use the same port for both HTTP and WebSocket, the system will automatically resolve the conflict by moving WebSocket to the next available port.
 
 ## Message Handlers
 
@@ -405,7 +497,8 @@ Here's a basic JavaScript client implementation:
 
 ```javascript
 // Connect to the WebSocket server
-const socket = new WebSocket('ws://localhost:8080');
+// Note: WebSocket uses port 8081 (HTTP port 8080 + 1)
+const socket = new WebSocket('ws://localhost:8081');
 
 // Handle connection open
 socket.onopen = (event) => {
@@ -552,6 +645,7 @@ def handle_connect(data, client_id):
 
 # Create the application and attach components
 app = Daebus(__name__)
+# HTTP server on port 8080, WebSocket will use port 8081
 http = DaebusHttp(port=8080)
 websocket = DaebusWebSocket()
 
@@ -636,7 +730,8 @@ import threading
 
 app = Daebus(__name__)
 
-# Set up HTTP and WebSocket
+# Set up HTTP and WebSocket servers
+# HTTP on port 8080, WebSocket will automatically use port 8081
 http = DaebusHttp(port=8080)
 websocket = DaebusWebSocket()
 
@@ -838,6 +933,9 @@ def get_rooms(req):
     }, 200)
 
 if __name__ == "__main__":
+    print("Starting chat application:")
+    print("  HTTP API:  http://localhost:8080")
+    print("  WebSocket: ws://localhost:8081")
     app.run(service="chat_service")
 ```
 
@@ -868,10 +966,11 @@ These warnings are related to the underlying `websockets` library and do not aff
 
 If clients can't connect:
 
-1. Verify the WebSocket server is running (check logs)
-2. Ensure the client is using the correct WebSocket URL
-3. Check for firewall or proxy issues blocking WebSocket traffic
-4. Verify HTTP is properly set up before WebSockets
+1. **Check the correct port**: WebSocket uses HTTP port + 1 (e.g., if HTTP is on 8080, WebSocket is on 8081)
+2. **Verify the WebSocket server is running** (check logs for "WebSocket server listening on port X")
+3. **Use the correct WebSocket URL**: `ws://your-server:WEBSOCKET_PORT` (not the HTTP port)
+4. **Check for firewall or proxy issues** blocking WebSocket traffic
+5. **Verify HTTP is properly set up** if using both services together
 
 ### Message Handling
 
