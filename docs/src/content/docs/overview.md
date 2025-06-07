@@ -162,8 +162,8 @@ WebSocket handlers process real-time messages:
 
 ```python
 @app.socket("chat_message")
-def handle_chat(req, sid):
-    message = req.data.get("message", "")
+def handle_chat(data, client_id):
+    message = data.get("message", "")
     
     # Process the message
     return {
@@ -265,7 +265,7 @@ def http_get_metrics(req):
 
 # WebSocket message handler
 @app.socket("subscribe_metrics")
-def socket_subscribe_metrics(req, sid):
+def socket_subscribe_metrics(data, client_id):
     # Register this client for metric updates
     # (implementation details omitted)
     
