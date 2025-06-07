@@ -105,10 +105,7 @@ class DaebusWebSocket:
         self.rate_limit_window = 60    # Window size in seconds
         self.rate_limit_counters = defaultdict(lambda: deque(maxlen=1000))  # Client message timestamps
         
-        # Batched broadcasting
-        self._broadcast_queue = {}      # Message queue for batched broadcasts
-        self._broadcast_task = None     # Task for processing batched broadcasts
-        self._broadcast_interval = 0    # Disabled by default to prevent startup issues
+        # Note: Batched broadcasting removed as it was unused
         
         # Actual port being used (may differ from self.port if there's a conflict)
         self.actual_port = None
@@ -179,15 +176,7 @@ class DaebusWebSocket:
                     
                     self.logger.info(f"WebSocket server listening on port {self.port}")
                     
-                    # Start the broadcast task if batched broadcasting is enabled
-                    broadcast_task = None
-                    if self._broadcast_interval > 0:
-                        try:
-                            broadcast_task = asyncio.create_task(self._process_broadcast_queue())
-                            self._broadcast_task = broadcast_task
-                        except Exception as e:
-                            self.logger.warning(f"Failed to start broadcast task: {e}")
-                            broadcast_task = None
+                    # No additional tasks needed for startup
                     
                     # Keep the server running until the daemon is shut down
                     try:
@@ -196,18 +185,6 @@ class DaebusWebSocket:
                     finally:
                         # Mark as not running first
                         self.is_running = False
-                        
-                        # Cancel broadcast task if running
-                        if broadcast_task is not None and not broadcast_task.done():
-                            broadcast_task.cancel()
-                            try:
-                                await broadcast_task
-                            except asyncio.CancelledError:
-                                pass
-                            except Exception as e:
-                                self.logger.debug(f"Error cancelling broadcast task: {e}")
-                        
-                        self._broadcast_task = None
                         
                         # Close the server
                         if server is not None:
@@ -1276,116 +1253,7 @@ class DaebusWebSocket:
         # Add current timestamp to the queue
         self.rate_limit_counters[client_id].append(time.time())
         
-    def enable_batched_broadcasting(self, interval: float = 0.1) -> None:
-        """
-        Enable batched broadcasting for more efficient message sending.
-        
-        This improves performance when sending many broadcasts in quick succession
-        by batching them together.
-        
-        Args:
-            interval: How often to process the broadcast queue, in seconds
-        """
-        self._broadcast_interval = interval
-        
-        # Start the broadcast task if we're running
-        if self.is_running and self._broadcast_task is None:
-            self._start_broadcast_task()
-            
-        self.logger.info(f"Batched broadcasting enabled with {interval}s interval")
-        
-    def _start_broadcast_task(self) -> None:
-        """Start the background task for processing the broadcast queue."""
-        async def process_broadcast_queue():
-            while self.is_running:
-                try:
-                    # Process all queued broadcasts
-                    queue_copy = self._broadcast_queue.copy()
-                    self._broadcast_queue.clear()
-                    
-                    # Send all queued messages
-                    for target, messages in queue_copy.items():
-                        if target == "_all_":
-                            # Broadcast to all clients
-                            for message_data, msg_type in messages:
-                                await self.broadcast_to_all_async(message_data, msg_type)
-                        elif isinstance(target, list):
-                            # Broadcast to multiple clients
-                            for message_data, msg_type in messages:
-                                await self.broadcast_to_clients_async(target, message_data, msg_type)
-                        else:
-                            # Send to a specific client
-                            client_id = target
-                            if client_id in self.clients:
-                                for message_data, msg_type in messages:
-                                    await self.send_to_client_async(client_id, message_data, msg_type)
-                                    
-                    # Wait for the next interval
-                    await asyncio.sleep(self._broadcast_interval)
-                except Exception as e:
-                    self.logger.error(f"Error in broadcast queue processing: {e}")
-                    await asyncio.sleep(1)  # Sleep longer on error
-        
-        # Create task in the running event loop
-        try:
-            loop = asyncio.get_running_loop()
-            self._broadcast_task = loop.create_task(process_broadcast_queue())
-        except RuntimeError:
-            # No running event loop, log a warning
-            self.logger.warning("No running event loop, batched broadcasting will be delayed until server is running")
-            
-    def queue_broadcast(self, data: Any, message_type: str = "broadcast", target: Union[str, List[str], None] = None) -> None:
-        """
-        Queue a broadcast message to be sent in the next batch.
-        
-        Args:
-            data: The data to send
-            message_type: The type of message
-            target: Optional target client ID(s) or None for all clients
-        """
-        # Determine the target key for the queue
-        target_key = "_all_" if target is None else target
-        
-        # Add to the queue
-        if target_key not in self._broadcast_queue:
-            self._broadcast_queue[target_key] = []
-            
-        self._broadcast_queue[target_key].append((data, message_type))
-        
-        # Start the broadcast task if needed
-        if self.is_running and self._broadcast_task is None:
-            self._start_broadcast_task()
-
-    async def _process_broadcast_queue(self) -> None:
-        """Process the broadcast queue in a background task."""
-        while self.is_running:
-            try:
-                # Process all queued broadcasts
-                queue_copy = self._broadcast_queue.copy()
-                self._broadcast_queue.clear()
-                
-                # Send all queued messages
-                for target, messages in queue_copy.items():
-                    if target == "_all_":
-                        # Broadcast to all clients
-                        for message_data, msg_type in messages:
-                            await self.broadcast_to_all_async(message_data, msg_type)
-                    elif isinstance(target, list):
-                        # Broadcast to multiple clients
-                        for message_data, msg_type in messages:
-                            await self.broadcast_to_clients_async(target, message_data, msg_type)
-                    else:
-                        # Send to a specific client
-                        client_id = target
-                        if client_id in self.clients:
-                            for message_data, msg_type in messages:
-                                await self.send_to_client_async(client_id, message_data, msg_type)
-                                
-                # Wait for the next interval
-                await asyncio.sleep(self._broadcast_interval)
-            except Exception as e:
-                self.logger.error(f"Error in broadcast queue processing: {e}")
-                await asyncio.sleep(1)  # Sleep longer on error 
+    # Batched broadcasting methods removed - feature was unused
 
     def safe_broadcast_to_all(self, data: Any, message_type: str = "broadcast") -> int:
         """
