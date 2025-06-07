@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daebus"
-version = "0.0.22"
+version = "0.0.23"
 authors = [
   { name="Tom West", email="tom@bambo.co" },
 ]
