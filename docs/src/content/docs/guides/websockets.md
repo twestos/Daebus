@@ -32,19 +32,55 @@ app.run(service="realtime_service")
 
 ## Message Handlers
 
+### Understanding Handler Signatures
+
+**Important**: WebSocket message handlers in Daebus use a specific signature that differs from some other WebSocket libraries:
+
+```python
+@app.socket("message_type")
+def handler(data, client_id):
+    # data: Contents of the 'data' field from the client message
+    # client_id: Unique identifier for the WebSocket connection
+    pass
+```
+
+**What the client sends vs. what your handler receives:**
+
+```javascript
+// Client sends this complete message:
+{
+    "type": "chat_message",    // Used to route to the correct handler
+    "data": {                  // This object becomes the 'data' parameter
+        "message": "Hello!",
+        "room": "general"
+    }
+}
+```
+
+```python
+# Your handler receives:
+@app.socket("chat_message")  # ← Matches the 'type' field
+def handle_chat(data, client_id):
+    # data = {"message": "Hello!", "room": "general"}
+    # client_id = "user_abc123..." (unique session ID)
+    
+    message = data.get("message")  # ← Direct access to message data
+    room = data.get("room")
+```
+
 ### Handling Message Types
 
 Use the `@app.socket()` decorator to handle specific message types:
 
 ```python
 @app.socket("chat_message")
-def handle_chat(req, sid):
+def handle_chat(data, client_id):
     """Handle incoming chat messages"""
-    message = req.data.get("message", "")
-    sender = req.data.get("sender", "Anonymous")
+    message = data.get("message", "")
+    sender = data.get("sender", "Anonymous")
     
     # Log the message
-    logger.info(f"Received chat message from {sender} (client {sid}): {message}")
+    logger.info(f"Received chat message from {sender} (client {client_id}): {message}")
     
     # Broadcast to all clients
     app.websocket.broadcast_to_all({
@@ -61,8 +97,8 @@ def handle_chat(req, sid):
 ```
 
 The handler function receives two parameters:
-- `req`: The WebSocketRequest object containing message data
-- `sid`: The client's session ID (a unique identifier for the connection)
+- `data`: The contents of the `data` field from the client's message
+- `client_id`: The client's session ID (a unique identifier for the connection)
 
 ### Connection Events
 
@@ -70,25 +106,25 @@ Handle client connections and disconnections:
 
 ```python
 @app.socket_connect()
-def on_connect(req, sid):
+def on_connect(data, client_id):
     """Handle new client connection"""
-    logger.info(f"Client {sid} connected")
+    logger.info(f"Client {client_id} connected")
     
     # You can return data that will be sent to the client
     return {
         "status": "connected",
-        "client_id": sid,
+        "client_id": client_id,
         "server_time": time.time()
     }
 
 @app.socket_disconnect()
-def on_disconnect(req, sid):
+def on_disconnect(data, client_id):
     """Handle client disconnection"""
-    logger.info(f"Client {sid} disconnected")
+    logger.info(f"Client {client_id} disconnected")
     
     # Clean up any client-specific resources
-    if sid in user_sessions:
-        del user_sessions[sid]
+    if client_id in user_sessions:
+        del user_sessions[client_id]
 ```
 
 ### Client Registration
@@ -97,19 +133,19 @@ Handle client registration with custom data:
 
 ```python
 @app.socket_register()
-def on_register(req, sid):
+def on_register(data, client_id):
     """Handle client registration"""
-    user_data = req.data.get("user", {})
-    username = user_data.get("username", f"Guest-{sid[:8]}")
+    user_data = data.get("user", {})
+    username = user_data.get("username", f"Guest-{client_id[:8]}")
     
     # Store the user information
-    user_sessions[sid] = {
+    user_sessions[client_id] = {
         "username": username,
         "registered_at": time.time(),
         "is_active": True
     }
     
-    logger.info(f"Client {sid} registered as {username}")
+    logger.info(f"Client {client_id} registered as {username}")
     
     # Notify others about the new user
     app.websocket.broadcast_to_all({
@@ -131,8 +167,8 @@ Send a response to the client who sent the message:
 
 ```python
 @app.socket("get_data")
-def handle_data_request(req, sid):
-    data_id = req.data.get("id")
+def handle_data_request(data, client_id):
+    data_id = data.get("id")
     
     try:
         # Fetch the requested data
@@ -291,32 +327,77 @@ def disconnect_client():
     })
 ```
 
-## Working with Request Data
+## Working with Message Data
 
-The `req` object in WebSocket handlers provides:
+WebSocket handlers receive the message data directly from the client's `data` field:
 
 ```python
 @app.socket("example_message")
-def handle_example(req, sid):
-    # Message type (from the 'type' field in the client message)
-    message_type = req.message_type
+def handle_example(data, client_id):
+    # Direct access to the message data (from the 'data' field in the client message)
+    username = data.get("username", "Anonymous")
+    action = data.get("action", "view")
     
-    # Full message payload
-    full_payload = req.payload
+    # The client_id parameter provides the unique identifier for this connection
+    logger.info(f"Processing {action} request from {username} (client: {client_id})")
     
-    # Convenience access to the 'data' field of the message
-    message_data = req.data
-    
-    # Access specific fields with defaults
-    username = message_data.get("username", "Anonymous")
-    action = message_data.get("action", "view")
-    
-    # You can also access the WebSocket connection directly
-    websocket = req.websocket
+    # If you need access to the full request context, use the request proxy
+    from daebus.modules.context import request
+    message_type = request.message_type  # The 'type' field from the client message
+    websocket_connection = request.websocket  # The underlying WebSocket connection
     
     # Process the message...
     return {"status": "processed"}
 ```
+
+**Client Message Structure:**
+```javascript
+// Client sends this structure
+{
+    "type": "example_message",    // Determines which handler is called
+    "data": {                     // This object is passed as 'data' parameter
+        "username": "JohnDoe",
+        "action": "view"
+    }
+}
+```
+
+**When you need the full request context:**
+
+If you need access to the complete message structure, WebSocket connection, or other request details, use the request proxy:
+
+```python
+@app.socket("advanced_handler")
+def handle_advanced(data, client_id):
+    # Access message data directly (recommended for most cases)
+    username = data.get("username")
+    
+    # Access full request context when needed
+    from daebus.modules.context import request
+    
+    message_type = request.message_type     # The 'type' field from client
+    full_payload = request.payload          # Complete client message
+    websocket_conn = request.websocket      # Raw WebSocket connection
+    
+    # Access client metadata
+    metadata = app.websocket.get_client_metadata(client_id)
+    connected_at = metadata.get("connected_at")
+    
+    return {"processed": True}
+```
+
+**Important Notes:**
+
+1. **Return values**: Anything you return from a handler is automatically sent to the client as a response message
+2. **Async handlers**: You can make handlers async if you need to perform async operations:
+   ```python
+   @app.socket("async_operation")
+   async def handle_async(data, client_id):
+       result = await some_async_operation()
+       return {"result": result}
+   ```
+3. **Error handling**: Exceptions in handlers are caught and sent as error messages to the client
+4. **No return value**: If your handler doesn't return anything, no response is sent (useful for fire-and-forget messages)
 
 ## Client-Side Implementation
 
@@ -392,7 +473,7 @@ Enable rate limiting to prevent abuse:
 # Set up rate limiting when creating the WebSocket component
 websocket = DaebusWebSocket()
 websocket.enable_rate_limiting(
-    messages_per_minute=60,  # Maximum messages per minute
+    max_messages=60,  # Maximum messages per minute
     window_seconds=60        # Time window for counting messages
 )
 app.attach(websocket)
@@ -444,16 +525,20 @@ Use blueprints to organize WebSocket handlers:
 ```python
 from daebus import Daebus, DaebusHttp, DaebusWebSocket, Blueprint
 
+# Global storage for the blueprint example
+chat_rooms = {}
+authenticated_users = {}
+
 # Create a blueprint for chat functionality
 chat_bp = Blueprint("chat")
 
 @chat_bp.socket("send_message")
-def handle_chat_message(req, sid):
+def handle_chat_message(data, client_id):
     # Chat message handling logic
     return {"received": True}
 
 @chat_bp.socket("join_room")
-def handle_join_room(req, sid):
+def handle_join_room(data, client_id):
     # Room joining logic
     return {"joined": True}
 
@@ -461,7 +546,7 @@ def handle_join_room(req, sid):
 user_bp = Blueprint("users")
 
 @user_bp.socket_connect()
-def handle_connect(req, sid):
+def handle_connect(data, client_id):
     # Connection handling
     return {"welcome": True}
 
@@ -489,9 +574,11 @@ Implement authentication for WebSocket connections:
 
 ```python
 @app.socket_connect()
-def on_connect(req, sid):
-    # Extract authentication token from request path or headers
-    token = extract_token_from_request(req)
+def on_connect(data, client_id):
+    # Extract authentication token from the connection request
+    # You can access the full request context using the request proxy
+    from daebus.modules.context import request
+    token = extract_token_from_request(request)
     
     if not token or not validate_token(token):
         # Return False to reject the connection
@@ -499,7 +586,12 @@ def on_connect(req, sid):
     
     # Store authenticated user information
     user_id = get_user_id_from_token(token)
-    app.websocket.set_client_data(sid, "user_id", user_id)
+    
+    # Store user info in your own session storage
+    authenticated_users[client_id] = {
+        "user_id": user_id,
+        "authenticated_at": time.time()
+    }
     
     logger.info(f"Authenticated connection from user {user_id}")
     return {"authenticated": True, "user_id": user_id}
@@ -511,9 +603,9 @@ Always validate incoming messages:
 
 ```python
 @app.socket("update_profile")
-def handle_profile_update(req, sid):
+def handle_profile_update(data, client_id):
     # Get user data
-    profile_data = req.data.get("profile", {})
+    profile_data = data.get("profile", {})
     
     # Validate required fields
     if not profile_data.get("name"):
@@ -559,25 +651,25 @@ users_lock = threading.Lock()
 
 # Connection handler
 @app.socket_connect()
-def on_connect(req, sid):
-    direct_logger.info(f"Client connected: {sid}")
-    return {"status": "connected", "client_id": sid}
+def on_connect(data, client_id):
+    direct_logger.info(f"Client connected: {client_id}")
+    return {"status": "connected", "client_id": client_id}
 
 # Disconnection handler
 @app.socket_disconnect()
-def on_disconnect(req, sid):
+def on_disconnect(data, client_id):
     # Remove user from rooms
     with rooms_lock:
         for room_name, room in list(rooms.items()):
-            if sid in room["members"]:
-                room["members"].remove(sid)
+            if client_id in room["members"]:
+                room["members"].remove(client_id)
                 
                 # Notify others in the room
                 if room["members"]:
                     app.websocket.broadcast_to_clients(
                         room["members"],
                         {
-                            "user": users.get(sid, {}).get("username", "Anonymous"),
+                            "user": users.get(client_id, {}).get("username", "Anonymous"),
                             "action": "left",
                             "room": room_name
                         },
@@ -586,28 +678,28 @@ def on_disconnect(req, sid):
     
     # Remove user
     with users_lock:
-        if sid in users:
-            del users[sid]
+        if client_id in users:
+            del users[client_id]
     
-    direct_logger.info(f"Client disconnected: {sid}")
+    direct_logger.info(f"Client disconnected: {client_id}")
 
 # User registration
 @app.socket("register")
-def register_user(req, sid):
-    username = req.data.get("username")
+def register_user(data, client_id):
+    username = data.get("username")
     
     if not username:
         return {"error": "Username is required", "status": "error"}
     
     # Store user information
     with users_lock:
-        users[sid] = {
+        users[client_id] = {
             "username": username,
             "registered_at": time.time(),
             "rooms": []
         }
     
-    direct_logger.info(f"User registered: {username} ({sid})")
+    direct_logger.info(f"User registered: {username} ({client_id})")
     
     return {
         "status": "registered",
@@ -617,39 +709,39 @@ def register_user(req, sid):
 
 # Create or join room
 @app.socket("join_room")
-def join_room(req, sid):
-    room_name = req.data.get("room")
+def join_room(data, client_id):
+    room_name = data.get("room")
     
     if not room_name:
         return {"error": "Room name is required", "status": "error"}
     
     # Get username
-    username = users.get(sid, {}).get("username", "Anonymous")
+    username = users.get(client_id, {}).get("username", "Anonymous")
     
     with rooms_lock:
         # Create room if it doesn't exist
         if room_name not in rooms:
             rooms[room_name] = {
                 "created_at": time.time(),
-                "created_by": sid,
+                "created_by": client_id,
                 "members": set(),
                 "messages": []
             }
             direct_logger.info(f"Room created: {room_name} by {username}")
         
         # Add user to room
-        rooms[room_name]["members"].add(sid)
+        rooms[room_name]["members"].add(client_id)
     
     # Add room to user's list
     with users_lock:
-        if sid in users and "rooms" in users[sid]:
-            if room_name not in users[sid]["rooms"]:
-                users[sid]["rooms"].append(room_name)
+        if client_id in users and "rooms" in users[client_id]:
+            if room_name not in users[client_id]["rooms"]:
+                users[client_id]["rooms"].append(room_name)
     
     # Notify others in the room
     with rooms_lock:
         room = rooms[room_name]
-        others = room["members"] - {sid}
+        others = room["members"] - {client_id}
         
         if others:
             app.websocket.broadcast_to_clients(
@@ -674,9 +766,9 @@ def join_room(req, sid):
 
 # Send message to room
 @app.socket("chat_message")
-def send_message(req, sid):
-    room_name = req.data.get("room")
-    message = req.data.get("message", "").strip()
+def send_message(data, client_id):
+    room_name = data.get("room")
+    message = data.get("message", "").strip()
     
     if not room_name or not message:
         return {"error": "Room and message are required", "status": "error"}
@@ -686,15 +778,15 @@ def send_message(req, sid):
         if room_name not in rooms:
             return {"error": "Room does not exist", "status": "error"}
         
-        if sid not in rooms[room_name]["members"]:
+        if client_id not in rooms[room_name]["members"]:
             return {"error": "Not a member of this room", "status": "error"}
     
     # Get username
-    username = users.get(sid, {}).get("username", "Anonymous")
+    username = users.get(client_id, {}).get("username", "Anonymous")
     
     # Create message object
     msg = {
-        "id": f"msg_{time.time()}_{sid[:8]}",
+        "id": f"msg_{time.time()}_{client_id[:8]}",
         "room": room_name,
         "sender": username,
         "text": message,
@@ -709,7 +801,7 @@ def send_message(req, sid):
             rooms[room_name]["messages"] = rooms[room_name]["messages"][-100:]
             
         # Get all members except sender
-        recipients = list(rooms[room_name]["members"] - {sid})
+        recipients = list(rooms[room_name]["members"] - {client_id})
     
     # Broadcast to other room members
     if recipients:
@@ -758,6 +850,17 @@ if __name__ == "__main__":
 5. **Performance**: Be mindful of broadcasting to large numbers of clients
 6. **Reconnection**: Implement reconnection logic on the client side
 7. **Testing**: Test with multiple simultaneous connections to ensure scalability
+
+## Deprecation Warnings
+
+You may see deprecation warnings related to the `websockets` library:
+
+```
+DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+DeprecationWarning: websockets.legacy is deprecated
+```
+
+These warnings are related to the underlying `websockets` library and do not affect functionality. They will be addressed in future versions of Daebus. You can safely ignore them for now.
 
 ## Troubleshooting
 

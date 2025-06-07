@@ -126,16 +126,16 @@ Register WebSocket message handlers:
 
 ```python
 @blueprint.socket("user_update")
-def handle_user_update(req, sid):
+def handle_user_update(data, client_id):
     # Handle WebSocket message
     return {"status": "processed"}
 
 @blueprint.socket_connect()
-def on_connect(req, sid):
+def on_connect(data, client_id):
     return {"status": "connected"}
 
 @blueprint.socket_disconnect()
-def on_disconnect(req, sid):
+def on_disconnect(data, client_id):
     # Clean up resources
     pass
 ```
@@ -379,7 +379,7 @@ def http_create_user(req):
 
 # WebSocket handlers
 @users_bp.socket("get_users")
-def ws_get_users(req, sid):
+def ws_get_users(data, client_id):
     return {
         "users": list(users.values())
     }
@@ -509,9 +509,9 @@ def http_login(req):
 
 # WebSocket authentication
 @auth_bp.socket_connect()
-def ws_authenticate(req, sid):
-    # Extract token from query parameters or headers
-    token = req.data.get("token")
+def ws_authenticate(data, client_id):
+    # Extract token from connection data
+    token = data.get("token")
     
     if not token:
         # No token provided, allow connection but mark as unauthenticated
