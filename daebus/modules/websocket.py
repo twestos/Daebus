@@ -159,9 +159,12 @@ class DaebusWebSocket:
             self.logger.info(f"WebSocket server listening on port {self.port}")
             
             # Keep the server running until the daemon is shut down
-            try:
+            async def keep_running():
                 while running() and self.is_running:
-                    loop.run_until_complete(asyncio.sleep(1))
+                    await asyncio.sleep(1)
+            
+            try:
+                loop.run_until_complete(keep_running())
             except Exception as e:
                 self.logger.error(f"Error in WebSocket server: {e}")
             finally:
