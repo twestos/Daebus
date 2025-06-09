@@ -276,11 +276,13 @@ def parse_multipart_form(content_type: str, data: bytes) -> Dict[str, Any]:
 class DaebusHttpHandler(BaseHTTPRequestHandler):
     """HTTP request handler for Daebus HTTP server."""
 
-    # These will be set by DaebusHttp when creating the server
-    routes: Dict[str, Dict[str, Any]] = {}
-    logger = None
-    daemon = None
-    cors_config = None
+    def __init__(self, *args, **kwargs):
+        # Extract our custom attributes before calling parent constructor
+        self.routes = kwargs.pop('routes', {})
+        self.logger = kwargs.pop('logger', None)
+        self.daemon = kwargs.pop('daemon', None)
+        self.cors_config = kwargs.pop('cors_config', None)
+        super().__init__(*args, **kwargs)
 
     def log_message(self, format: str, *args: Any) -> None:
         """Override to use Daebus logger instead of stderr"""
@@ -289,8 +291,15 @@ class DaebusHttpHandler(BaseHTTPRequestHandler):
 
     def _get_route_handler(self, path: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, str]]:
         """Find the appropriate route handler for the given path"""
+        # Add debugging to track route matching
+        if self.logger:
+            self.logger.debug(f"Looking for route handler for path: '{path}'")
+            self.logger.debug(f"Available routes: {list(self.routes.keys())}")
+        
         # First try exact match
         if path in self.routes:
+            if self.logger:
+                self.logger.debug(f"Found exact match for path: '{path}'")
             return self.routes[path], {}
 
         # Check for parametrized routes
@@ -316,8 +325,12 @@ class DaebusHttpHandler(BaseHTTPRequestHandler):
                         break
 
                 if match:
+                    if self.logger:
+                        self.logger.debug(f"Found parametrized match: '{route_path}' for path: '{path}' with params: {params}")
                     return route_info, params
 
+        if self.logger:
+            self.logger.debug(f"No route handler found for path: '{path}'")
         return None, {}
 
     def _parse_json_body(self) -> Optional[Dict[str, Any]]:
@@ -867,18 +880,19 @@ class DaebusHttp:
             self.logger.warning("HTTP server already running")
             return
 
-        # Create a custom handler with access to our routes
-        handler_class = type('CustomDaebusHttpHandler', (DaebusHttpHandler,), {
-            'routes': self.routes,
-            'logger': self.logger,
-            'daemon': self.daemon,
-            'cors_config': self.cors_config
-        })
+        # Create a factory function that creates handlers with our instance data
+        def handler_factory(*args, **kwargs):
+            # Pass our instance data to the handler constructor
+            kwargs['routes'] = self.routes
+            kwargs['logger'] = self.logger
+            kwargs['daemon'] = self.daemon
+            kwargs['cors_config'] = self.cors_config
+            return DaebusHttpHandler(*args, **kwargs)
 
         try:
             # Create the server
             self.server = ThreadedHTTPServer(
-                (self.host, self.port), handler_class)
+                (self.host, self.port), handler_factory)
             self.logger.info(
                 f"Starting HTTP server on {self.host}:{self.port}")
 
