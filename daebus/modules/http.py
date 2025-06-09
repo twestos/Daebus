@@ -7,10 +7,93 @@ import io
 import time
 import re
 import email.parser
+import datetime
+import decimal
 from typing import Dict, Any, Tuple, Optional, List, Callable, Set, Union
 
 from .logger import logger as _default_logger
 from .context import set_context_type
+
+
+__all__ = [
+    'DaebusHttp',
+    'HttpRequest', 
+    'HttpResponse',
+    'DaebusJSONEncoder',
+    'make_json_serializable'
+]
+
+
+class DaebusJSONEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder that handles common non-serializable types.
+    """
+    
+    def default(self, obj):
+        # Handle datetime objects
+        if isinstance(obj, (datetime.datetime, datetime.date)):
+            return obj.isoformat()
+        
+        # Handle time objects
+        if isinstance(obj, datetime.time):
+            return obj.isoformat()
+        
+        # Handle timedelta objects
+        if isinstance(obj, datetime.timedelta):
+            return str(obj)
+        
+        # Handle decimal objects
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)
+        
+        # Handle sets
+        if isinstance(obj, set):
+            return list(obj)
+        
+        # Handle bytes
+        if isinstance(obj, bytes):
+            try:
+                return obj.decode('utf-8')
+            except UnicodeDecodeError:
+                return obj.hex()
+        
+        # Handle custom objects with __dict__
+        if hasattr(obj, '__dict__'):
+            return obj.__dict__
+        
+        # Handle objects with a to_dict method
+        if hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
+            return obj.to_dict()
+        
+        # Handle objects with a __str__ method as last resort
+        try:
+            return str(obj)
+        except Exception:
+            return f"<{type(obj).__name__} object>"
+
+
+def make_json_serializable(obj: Any) -> Any:
+    """
+    Convert an object to a JSON-serializable format.
+    
+    This function can be used by route handlers to pre-process their response data
+    to ensure it's JSON serializable before returning it.
+    
+    Args:
+        obj: The object to make JSON serializable
+        
+    Returns:
+        JSON-serializable version of the object
+    """
+    encoder = DaebusJSONEncoder()
+    # Use the encoder's logic to convert the object
+    try:
+        # Try to serialize and deserialize to ensure it's truly serializable
+        serialized = json.dumps(obj, cls=DaebusJSONEncoder)
+        return json.loads(serialized)
+    except Exception:
+        # If that fails, just apply the encoder's default method
+        return encoder.default(obj)
 
 
 class HttpRequest:
@@ -327,13 +410,17 @@ class DaebusHttpHandler(BaseHTTPRequestHandler):
             # Convert data to JSON and encode as bytes
             try:
                 # Pretty-print JSON with indentation for better command line readability
-                response = json.dumps(data, indent=2).encode('utf-8')
+                # Use custom encoder to handle non-serializable types
+                response = json.dumps(data, indent=2, cls=DaebusJSONEncoder).encode('utf-8')
                 self.wfile.write(response)
             except (TypeError, ValueError) as e:
-                # Handle case where data is not JSON serializable
+                # Handle case where data is still not JSON serializable
                 self.logger.error(f"Error serializing response to JSON: {e}")
+                # Log the problematic data for debugging
+                self.logger.debug(f"Data that failed to serialize: {type(data)} - {repr(data)}")
                 error_response = json.dumps(
-                    {"error": "Internal server error"}, indent=2).encode('utf-8')
+                    {"error": "Internal server error", "message": "Failed to serialize response data"}, 
+                    indent=2).encode('utf-8')
                 self.wfile.write(error_response)
             except Exception as e:
                 self.logger.error(f"Error sending response: {e}")
