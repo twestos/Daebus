@@ -460,7 +460,13 @@ class DaebusHttpHandler(BaseHTTPRequestHandler):
                 http_request = HttpRequest(raw_request)
                 http_response = HttpResponse(self)
 
-                # Set these on the daemon for use by context-aware proxies
+                # Set thread-local request/response for this context
+                from .context import _set_thread_local_request, _set_thread_local_response
+                _set_thread_local_request(http_request)
+                _set_thread_local_response(http_response)
+                
+                # Also set on daemon for backward compatibility (but this creates race conditions)
+                # TODO: Remove these once all code uses the proxy pattern
                 self.daemon.request_http = http_request
                 self.daemon.response_http = http_response
 
@@ -478,6 +484,14 @@ class DaebusHttpHandler(BaseHTTPRequestHandler):
                 finally:
                     # Always reset the context type, even if an exception occurred
                     set_context_type(None)
+                    
+                    # Clean up thread-local storage
+                    from .context import _clear_thread_local_storage
+                    _clear_thread_local_storage()
+                    
+                    # Clear daemon's request/response to prevent leaking between threads
+                    self.daemon.request_http = None
+                    self.daemon.response_http = None
 
                 # Check if we already have a response from http_response methods
                 if http_response._response_data is not None:
