@@ -12,6 +12,7 @@ from websockets.server import WebSocketServerProtocol
 from websockets.exceptions import ConnectionClosed
 
 from .logger import logger as _default_logger
+from .http import DaebusJSONEncoder
 
 
 class WebSocketRequest:
@@ -57,14 +58,14 @@ class WebSocketResponse:
                 # Find the target client and send to it
                 if target_sid in daemon.websocket.clients:
                     target_ws = daemon.websocket.clients[target_sid]
-                    await target_ws.send(json.dumps(message))
+                    await target_ws.send(json.dumps(message, cls=DaebusJSONEncoder))
                 else:
                     # Log a warning if client doesn't exist
                     from .logger import logger
                     logger.warning(f"Client {target_sid} not found, message not sent")
         else:
             # Send to the current client
-            await self.websocket.send(json.dumps(message))
+            await self.websocket.send(json.dumps(message, cls=DaebusJSONEncoder))
         
     async def error(self, err: Union[Exception, str], message_type: str = "error", target_sid: Optional[str] = None) -> None:
         """
@@ -371,7 +372,7 @@ class DaebusWebSocket:
             "type": message_type,
             "data": data
         }
-        message_json = json.dumps(message)
+        message_json = json.dumps(message, cls=DaebusJSONEncoder)
         
         # Count successful sends
         success_count = 0
@@ -504,7 +505,7 @@ class DaebusWebSocket:
             "type": message_type,
             "data": data
         }
-        message_json = json.dumps(message)
+        message_json = json.dumps(message, cls=DaebusJSONEncoder)
         
         try:
             await self.clients[client_id].send(message_json)
@@ -674,7 +675,7 @@ class DaebusWebSocket:
             "type": message_type,
             "data": data
         }
-        message_json = json.dumps(message)
+        message_json = json.dumps(message, cls=DaebusJSONEncoder)
         
         for client_id in client_ids:
             if client_id not in self.clients:
@@ -1021,7 +1022,7 @@ class DaebusWebSocket:
                         await websocket.send(json.dumps({
                             "type": "response",
                             "data": result
-                        }))
+                        }, cls=DaebusJSONEncoder))
                         
                         # Update message metrics
                         if client_id in self.client_metadata:
@@ -1049,7 +1050,7 @@ class DaebusWebSocket:
                             "type": "error",
                             "error": "Rate limit exceeded",
                             "retry_after": self.rate_limit_window
-                        }))
+                        }, cls=DaebusJSONEncoder))
                         continue
                         
                     # Parse the message
@@ -1063,7 +1064,7 @@ class DaebusWebSocket:
                         await websocket.send(json.dumps({
                             "type": "error",
                             "error": "No message type provided"
-                        }))
+                        }, cls=DaebusJSONEncoder))
                         continue
                     
                     # Get the handler for this message type
@@ -1074,7 +1075,7 @@ class DaebusWebSocket:
                         await websocket.send(json.dumps({
                             "type": "error",
                             "error": f"No handler found for message type '{message_type}'"
-                        }))
+                        }, cls=DaebusJSONEncoder))
                         continue
                     
                     # Create request and response objects for context (backward compatibility)
@@ -1145,7 +1146,7 @@ class DaebusWebSocket:
                     await websocket.send(json.dumps({
                         "type": "error",
                         "error": "Invalid JSON"
-                    }))
+                    }, cls=DaebusJSONEncoder))
                     
                     # Update message metrics
                     if client_id in self.client_metadata:

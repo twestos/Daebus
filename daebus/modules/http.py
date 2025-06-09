@@ -57,13 +57,13 @@ class DaebusJSONEncoder(json.JSONEncoder):
             except UnicodeDecodeError:
                 return obj.hex()
         
+        # Handle objects with a to_dict method (prioritize over __dict__)
+        if hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
+            return obj.to_dict()
+        
         # Handle custom objects with __dict__
         if hasattr(obj, '__dict__'):
             return obj.__dict__
-        
-        # Handle objects with a to_dict method
-        if hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
-            return obj.to_dict()
         
         # Handle objects with a __str__ method as last resort
         try:

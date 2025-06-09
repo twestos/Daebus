@@ -93,8 +93,8 @@ def test_websocket_e2e():
             
             # Create a wrapper function to adapt the handler signature
             async def handler_wrapper(websocket):
-                # Call with a mock path parameter
-                await app.websocket._handle_connection(websocket, "/")
+                # Call the connection handler
+                await app.websocket._handle_connection(websocket)
             
             # Start the WebSocket server directly
             async def setup_ws_server():

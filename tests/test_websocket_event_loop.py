@@ -173,7 +173,7 @@ class WebSocketEventLoopTests:
             
             async def handler_wrapper(websocket):
                 # Call with a mock path parameter
-                await self.ws._handle_connection(websocket, "/")
+                await self.ws._handle_connection(websocket)
             
             async def setup_ws_server():
                 try:
